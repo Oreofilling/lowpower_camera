@@ -533,6 +533,7 @@ static int do_fset_cmd(int argc, char **argv)
 {
     const char *key[] = {KEY_DEVICE_MAC, KEY_DEVICE_SN, KEY_DEVICE_HVER, KEY_DEVICE_MODEL, KEY_DEVICE_COUNTRY, KEY_DEVICE_SECRETKEY};
     uint8_t i, n;
+    esp_err_t err = ESP_OK;
     n = sizeof(key) / sizeof(key[0]);
 
     if (argc < 2) {
@@ -547,12 +548,26 @@ static int do_fset_cmd(int argc, char **argv)
         mutex_lock();
         if (argc == 2) {
             printf("erase %s\n", key[i]);
-            nvs_erase_key(g_factoryHandle, key[i]);
+            err = nvs_erase_key(g_factoryHandle, key[i]);
+            if (err == ESP_OK) {
+                err = commit_cfg(g_factoryHandle);
+            }
         } else {
-            set_str(g_factoryHandle, key[i], argv[2]);
+            err = set_str(g_factoryHandle, key[i], argv[2]);
+            if (err == ESP_OK) {
+                err = commit_cfg(g_factoryHandle);
+            }
         }
-        commit_cfg(g_factoryHandle);
         mutex_unlock();
+        if (err != ESP_OK) {
+            /* A failed set/commit must be visible on the console stream: the
+             * factory tool verifies via same-session fget, which reads the NVS
+             * RAM cache and still passes when only the flash commit failed.
+             * Returning ESP_OK here shipped devices whose factory fields
+             * vanished on the next power-cycle (2026-08 / 2026-10 incidents). */
+            printf("fset %s failed: %s\n", key[i], esp_err_to_name(err));
+            return err;
+        }
     } else {
         goto USAGE;
     }
