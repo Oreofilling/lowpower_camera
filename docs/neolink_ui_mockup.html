@@ -1,0 +1,1426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeoLink — CT-Prov 配置工具原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   NeoLink 原型 — NL 设计系统（OKLCH token / 单色 primary /
+   border-only 卡片 / 下划线 tabs / 骨架屏加载）
+   ============================================================ */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.01 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.01 264);
+  --card-hover-bg: oklch(0.995 0 0);
+  --primary: oklch(0.165 0.01 264);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.962 0.003 270);
+  --secondary-foreground: oklch(0.21 0.01 264);
+  --muted: oklch(0.962 0.003 270);
+  --muted-foreground: oklch(0.48 0.012 264);
+  --destructive: oklch(0.577 0.245 27);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.21 0.01 264 / 11.5%);
+  --border-hover: oklch(0.21 0.01 264 / 18%);
+  --ring: oklch(0.21 0.01 264 / 35%);
+
+  /* 语义色 + light 洗涤（alpha 固化在 token，不用 /opacity） */
+  --success: oklch(0.55 0.16 165);
+  --success-bg: oklch(0.55 0.16 165 / 10%);
+  --warning: oklch(0.72 0.16 85);
+  --warning-bg: oklch(0.72 0.16 85 / 14%);
+  --error: oklch(0.577 0.245 27);
+  --error-bg: oklch(0.577 0.245 27 / 8%);
+  --info: oklch(0.58 0.14 200);
+  --info-bg: oklch(0.58 0.14 200 / 10%);
+
+  /* 类别 accent */
+  --accent-purple: oklch(0.52 0.20 300);
+  --accent-purple-bg: oklch(0.52 0.20 300 / 10%);
+  --accent-cyan: oklch(0.58 0.14 200);
+  --accent-cyan-bg: oklch(0.58 0.14 200 / 10%);
+  --accent-emerald: oklch(0.55 0.16 165);
+  --accent-emerald-bg: oklch(0.55 0.16 165 / 10%);
+  --accent-indigo: oklch(0.48 0.20 280);
+  --accent-indigo-bg: oklch(0.48 0.20 280 / 10%);
+  --accent-orange: oklch(0.55 0.24 37);
+  --accent-orange-bg: oklch(0.55 0.24 37 / 10%);
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  /* 阴影只表达 hover 与浮层，静态卡片仅边框 */
+  --shadow-md: 0 4px 6px -1px oklch(0 0 0 / 10%), 0 2px 4px -2px oklch(0 0 0 / 10%);
+  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 12%), 0 4px 6px -4px oklch(0 0 0 / 12%);
+
+  --font-sans: "Plus Jakarta Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+.dark {
+  --background: oklch(0.135 0.01 270 / 97%);
+  --foreground: oklch(0.95 0.006 270);
+  --card: oklch(0.175 0.01 270 / 85%);
+  --card-foreground: oklch(0.95 0.006 270);
+  --card-hover-bg: oklch(1 0 0 / 4%);
+  --primary: oklch(0.95 0.006 270);
+  --primary-foreground: oklch(0.135 0.01 270);
+  --secondary: oklch(0.205 0.01 270);
+  --secondary-foreground: oklch(0.95 0.006 270);
+  --muted: oklch(0.205 0.01 270);
+  --muted-foreground: oklch(0.64 0.014 270);
+  --border: oklch(1 0 0 / 10%);
+  --border-hover: oklch(1 0 0 / 16%);
+  --ring: oklch(0.95 0.006 270 / 35%);
+  --success: oklch(0.72 0.16 165);
+  --success-bg: oklch(0.72 0.16 165 / 12%);
+  --warning: oklch(0.78 0.15 85);
+  --warning-bg: oklch(0.78 0.15 85 / 14%);
+  --error: oklch(0.677 0.20 25);
+  --error-bg: oklch(0.677 0.20 25 / 12%);
+  --info: oklch(0.72 0.12 200);
+  --info-bg: oklch(0.72 0.12 200 / 12%);
+  --accent-purple: oklch(0.72 0.16 300);
+  --accent-purple-bg: oklch(0.72 0.16 300 / 12%);
+  --accent-cyan: oklch(0.72 0.12 200);
+  --accent-cyan-bg: oklch(0.72 0.12 200 / 12%);
+  --accent-emerald: oklch(0.72 0.16 165);
+  --accent-emerald-bg: oklch(0.72 0.16 165 / 12%);
+  --accent-indigo: oklch(0.68 0.15 280);
+  --accent-indigo-bg: oklch(0.68 0.15 280 / 12%);
+  --accent-orange: oklch(0.72 0.17 37);
+  --accent-orange-bg: oklch(0.72 0.17 37 / 12%);
+  --shadow-md: 0 4px 6px -1px oklch(0 0 0 / 40%), 0 2px 4px -2px oklch(0 0 0 / 40%);
+  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 50%), 0 4px 6px -4px oklch(0 0 0 / 50%);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  height: 100vh; height: 100dvh;
+  font-family: var(--font-sans);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+::selection { background: var(--ring); }
+
+/* ---------- 字号阶梯（低于 text-xs 的微字号只用于元数据） ---------- */
+.t-micro { font-size: 9px; line-height: 12px; }
+.t-nano  { font-size: 10px; line-height: 14px; }
+.t-mini  { font-size: 11px; line-height: 16px; }
+.t-code  { font-size: 12px; line-height: 17px; }
+.t-body  { font-size: 13px; line-height: 19px; }
+.mono { font-family: var(--font-mono); }
+.muted { color: var(--muted-foreground); }
+
+/* ---------- 应用骨架：侧边栏 + PageLayout ---------- */
+#app { display: flex; height: 100%; }
+#sidebar {
+  width: 216px; flex: none;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 12px 8px;
+  gap: 2px;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 10px 12px 16px; }
+.brand-mark {
+  width: 28px; height: 28px; border-radius: var(--radius-md);
+  background: var(--primary); color: var(--primary-foreground);
+  display: grid; place-items: center; font-weight: 700; font-size: 13px;
+}
+.brand-name { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.brand-block .t-nano { color: var(--muted-foreground); }
+.nav-group-label { padding: 10px 12px 4px; color: var(--muted-foreground); }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px; border-radius: var(--radius-md);
+  color: var(--muted-foreground); cursor: pointer; user-select: none;
+  font-size: 13px; font-weight: 500;
+  transition: color .12s, background .12s;
+}
+.nav-item:hover { color: var(--foreground); background: var(--muted); }
+.nav-item.active { color: var(--foreground); background: var(--muted); font-weight: 600; }
+.nav-item .nidx { margin-left: auto; }
+.nav-item svg { flex: none; }
+.nav-item.locked { opacity: .45; cursor: not-allowed; }
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#topbar {
+  height: 52px; flex: none;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+}
+#topbar .grow { flex: 1; }
+#content { flex: 1; overflow-y: auto; }
+.page-wrap { max-width: 980px; margin: 0 auto; padding: 24px 32px 48px; }
+.page-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.page-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.page-desc { color: var(--muted-foreground); font-size: 13px; margin-bottom: 20px; }
+
+/* ---------- 下划线 tabs（无卡片底、无整行分割线） ---------- */
+.ptabs { display: flex; align-items: center; gap: 4px; margin: 0 -8px 20px; padding: 0 8px; }
+.ptab {
+  position: relative; padding: 8px 12px; border-radius: var(--radius-sm);
+  color: var(--muted-foreground); font-size: 13px; font-weight: 500;
+  cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px;
+  transition: color .12s, background .12s;
+}
+.ptab:hover { color: var(--foreground); background: var(--muted); }
+.ptab.active { color: var(--foreground); font-weight: 600; }
+.ptab.active::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
+  background: var(--foreground); border-radius: 9999px;
+}
+
+/* ---------- 卡片：静态仅边框，交互卡 hover 才有阴影 ---------- */
+.card {
+  background: var(--card); color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.card-interactive { cursor: pointer; transition: box-shadow .15s, border-color .15s, background .15s; }
+.card-interactive:hover { box-shadow: var(--shadow-md); border-color: var(--border-hover); background: var(--card-hover-bg); }
+.card-pad { padding: 16px; }
+.grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; padding: 0 16px; border-radius: var(--radius-md);
+  font-size: 14px; font-weight: 500; font-family: inherit;
+  border: 1px solid transparent; cursor: pointer; user-select: none;
+  transition: background .12s, border-color .12s, color .12s, box-shadow .12s;
+  white-space: nowrap;
+}
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.btn-primary:hover { background: color-mix(in oklch, var(--primary) 90%, var(--foreground)); }
+.btn-secondary { background: transparent; color: var(--foreground); border-color: var(--border); }
+.btn-secondary:hover { background: var(--muted); border-color: var(--border-hover); }
+.btn-ghost { background: transparent; color: var(--muted-foreground); }
+.btn-ghost:hover { background: var(--muted); color: var(--foreground); }
+.btn-destructive { background: var(--destructive); color: var(--destructive-foreground); }
+.btn-sm { height: 36px; padding: 0 12px; font-size: 13px; }
+.btn-xs { height: 28px; padding: 0 10px; font-size: 11px; border-radius: var(--radius-md); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---------- 徽章 / 状态点 ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 8px; border-radius: var(--radius-sm);
+  font-size: 11px; font-weight: 500; white-space: nowrap;
+}
+.b-success { background: var(--success-bg); color: var(--success); }
+.b-warning { background: var(--warning-bg); color: var(--warning); }
+.b-error   { background: var(--error-bg); color: var(--error); }
+.b-info    { background: var(--info-bg); color: var(--info); }
+.b-muted   { background: var(--muted); color: var(--muted-foreground); }
+.b-cyan    { background: var(--accent-cyan-bg); color: var(--accent-cyan); }
+.b-purple  { background: var(--accent-purple-bg); color: var(--accent-purple); }
+.b-emerald { background: var(--accent-emerald-bg); color: var(--accent-emerald); }
+.b-indigo  { background: var(--accent-indigo-bg); color: var(--accent-indigo); }
+.b-orange  { background: var(--accent-orange-bg); color: var(--accent-orange); }
+.dot { width: 7px; height: 7px; border-radius: 9999px; background: currentColor; flex: none; }
+.dot-pulse { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ---------- 表单 ---------- */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label { font-size: 13px; font-weight: 500; }
+.hint { font-size: 12px; color: var(--muted-foreground); }
+.input, select.input, textarea.input {
+  height: 36px; width: 100%; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: transparent; color: var(--foreground);
+  font-size: 13px; font-family: inherit;
+  transition: border-color .12s, box-shadow .12s;
+}
+textarea.input { height: auto; padding: 8px 10px; }
+.input:focus { outline: none; border-color: var(--border-hover); box-shadow: 0 0 0 2px var(--ring); }
+.input::placeholder { color: var(--muted-foreground); opacity: .7; }
+.input.mono { font-family: var(--font-mono); font-size: 12px; }
+.switch { position: relative; width: 34px; height: 20px; flex: none; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.switch .track {
+  position: absolute; inset: 0; border-radius: 9999px;
+  background: var(--muted); border: 1px solid var(--border);
+  transition: background .15s;
+}
+.switch .thumb {
+  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 9999px; background: var(--background);
+  box-shadow: var(--shadow-md); transition: transform .15s;
+}
+.switch input:checked ~ .track { background: var(--primary); border-color: var(--primary); }
+.switch input:checked ~ .thumb { transform: translateX(14px); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-grid .span2 { grid-column: span 2; }
+.check { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 13px; }
+.check input { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
+
+/* ---------- 表格行 ---------- */
+.rows { display: flex; flex-direction: column; }
+.row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 16px; border-bottom: 1px solid var(--border);
+  cursor: pointer; transition: background .12s;
+}
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--card-hover-bg); }
+.row.selected { background: var(--muted); }
+.row .grow { flex: 1; min-width: 0; }
+
+/* ---------- RSSI 信号条（活跃=前景色，未满=muted，不用彩色） ---------- */
+.rssi { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.rssi i { width: 3px; border-radius: 1px; background: var(--muted-foreground); opacity: .3; }
+.rssi i.on { background: var(--foreground); opacity: 1; }
+.rssi i:nth-child(1) { height: 4px; }
+.rssi i:nth-child(2) { height: 7px; }
+.rssi i:nth-child(3) { height: 10px; }
+.rssi i:nth-child(4) { height: 13px; }
+
+/* ---------- 骨架屏（加载态不用转圈） ---------- */
+.skel {
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--muted) 25%, var(--card-hover-bg) 45%, var(--muted) 65%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ---------- 扫码取景框（与扫描同页） ---------- */
+.qr-frame {
+  width: 118px; height: 118px; flex: none;
+  border: 2px dashed var(--border); border-radius: var(--radius-lg);
+  background: var(--muted); position: relative; overflow: hidden;
+  display: grid; place-items: center; padding: 12px; text-align: center;
+}
+.qr-line {
+  position: absolute; left: 8px; right: 8px; top: 8px; height: 2px;
+  background: var(--info); border-radius: 2px;
+  animation: qrscan 1.5s ease-in-out infinite alternate;
+}
+@keyframes qrscan { from { transform: translateY(0); } to { transform: translateY(96px); } }
+
+/* ---------- EmptyState（rounded-xl，图标容器一致） ---------- */
+.empty {
+  border: 1px solid var(--border); border-radius: var(--radius-xl);
+  padding: 40px 24px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.empty-ico {
+  width: 44px; height: 44px; border-radius: var(--radius-xl);
+  background: var(--muted); color: var(--muted-foreground);
+  display: grid; place-items: center;
+}
+
+/* ---------- JSON 预览 ---------- */
+.jsonbox {
+  background: var(--muted); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 14px 16px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.7;
+  overflow-x: auto; white-space: pre;
+}
+.jk { color: var(--accent-indigo); }
+.js { color: var(--success); }
+.jn { color: var(--accent-orange); }
+.jb { color: var(--accent-purple); }
+.jm { color: var(--muted-foreground); }
+
+/* ---------- 下发步骤条 ---------- */
+.steps { display: flex; align-items: center; gap: 0; margin: 8px 0 4px; }
+.step { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; position: relative; }
+.step .snode {
+  width: 26px; height: 26px; border-radius: 9999px;
+  border: 1px solid var(--border); background: var(--card);
+  display: grid; place-items: center; z-index: 1;
+  color: var(--muted-foreground); font-size: 11px; font-weight: 600;
+}
+.step .slabel { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; }
+.step::before {
+  content: ""; position: absolute; top: 13px; left: calc(-50% + 13px); right: calc(50% + 13px);
+  height: 2px; background: var(--border);
+}
+.step:first-child::before { display: none; }
+.step.done .snode { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.step.done .slabel { color: var(--foreground); }
+.step.done::before { background: var(--primary); }
+.step.err .snode { background: var(--error); border-color: var(--error); color: var(--destructive-foreground); }
+.step.err .slabel { color: var(--error); }
+
+/* ---------- 其他 ---------- */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font-family: var(--font-mono); font-size: 10px; line-height: 14px;
+  padding: 2px 7px; border-radius: var(--radius-sm);
+  background: var(--muted); color: var(--muted-foreground);
+  border: 1px solid var(--border);
+}
+.kv { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.kv .k { color: var(--muted-foreground); width: 110px; flex: none; }
+.divider { height: 1px; background: var(--border); margin: 14px 0; }
+.note {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--info-bg); border: 1px solid var(--info-bg);
+  border-radius: var(--radius-lg); padding: 10px 14px;
+  color: var(--foreground); font-size: 12.5px; line-height: 1.6;
+}
+.note .tico { color: var(--info); flex: none; margin-top: 1px; }
+.note.warn { background: var(--warning-bg); border-color: var(--warning-bg); }
+.note.warn .tico { color: var(--warning); }
+.note.err { background: var(--error-bg); border-color: var(--error-bg); }
+.note.err .tico { color: var(--error); }
+.src-pill { display: inline-flex; align-items: center; gap: 5px; }
+.page { display: none; }
+.page.on { display: block; }
+.two-col { display: grid; grid-template-columns: 1fr 360px; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .two-col, .form-grid { grid-template-columns: 1fr; } .form-grid .span2 { grid-column: span 1; } }
+.sticky-side { position: sticky; top: 0; }
+.scan-legend { display: flex; gap: 14px; align-items: center; color: var(--muted-foreground); }
+.src-dot { width: 6px; height: 6px; border-radius: 9999px; background: currentColor; }
+.footer-hint { margin-top: 28px; color: var(--muted-foreground); font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- ================= 侧边栏 ================= -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">N</div>
+      <div class="brand-block">
+        <div class="brand-name">NeoLink</div>
+        <div class="t-nano muted">CT-Prov/1 配置工具 · 原型 v2.0</div>
+      </div>
+    </div>
+    <div class="nav-group-label t-mini">流程</div>
+    <div class="nav-item" data-page="selfcheck" onclick="go('selfcheck')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+      环境自检
+    </div>
+    <div class="nav-item" data-page="scan" onclick="go('scan')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      扫描设备
+    </div>
+    <div class="nav-item locked" id="nav-empty" onclick="go('empty')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+      未发现设备
+    </div>
+    <div class="nav-item locked" id="nav-guide" onclick="go('guide')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20v.01M20 20v.01M17.5 17.5h.01"/></svg>
+      操作指引
+    </div>
+    <div class="nav-item locked" id="nav-connect" onclick="go('connect')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5"/></svg>
+      建立连接
+    </div>
+    <div class="nav-group-label t-mini">配置</div>
+    <div class="nav-item locked" id="nav-caps" onclick="go('caps')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      配置节
+    </div>
+    <div class="nav-item locked" id="nav-wifi" onclick="go('wifi')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/></svg>
+      Wi-Fi / HaLow
+    </div>
+    <div class="nav-item locked" id="nav-cat1" onclick="go('cat1')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 5h4M11 18h2"/></svg>
+      CAT1 / 蜂窝
+    </div>
+    <div class="nav-item locked" id="nav-svc" onclick="go('svc')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17V9M9 17V5M14 17v-7M19 17v-4"/></svg>
+      MQTT / Webhook
+    </div>
+    <div class="nav-group-label t-mini">下发</div>
+    <div class="nav-item locked" id="nav-deliver" onclick="go('deliver')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-8-8 18-2.5-7.5z"/></svg>
+      config.set
+    </div>
+    <div class="nav-item locked" id="nav-result" onclick="go('result')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+      下发结果
+    </div>
+  </aside>
+
+  <!-- ================= 主区域 ================= -->
+  <div id="main">
+    <header id="topbar">
+      <span class="t-mini muted mono">CT-Prov/1 · 无事务下发模型</span>
+      <span class="badge b-muted" id="tb-dev">未连接</span>
+      <span class="grow"></span>
+      <span class="badge b-info">P0 · Windows 参考实现</span>
+      <button class="btn btn-ghost btn-sm" onclick="toggleTheme()" title="切换主题">
+        <span id="theme-ico">◐</span> <span id="theme-lbl">深色</span>
+      </button>
+    </header>
+    <div id="content">
+
+      <!-- ========== 0. 环境自检（启动自动执行） ========== -->
+      <section class="page on" id="p-selfcheck">
+        <div class="page-wrap">
+          <div class="page-head">
+            <div class="page-title">环境自检</div>
+            <div class="page-actions">
+              <select id="scen-sel" class="input" style="height:32px;width:auto;font-size:12px" onchange="state.scen=this.value;runSelfCheck()">
+                <option value="normal">正常环境</option>
+                <option value="warn">模拟 · AP 枚举受限</option>
+                <option value="fail">模拟 · 蓝牙关闭</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="runSelfCheck()">重新检测</button>
+            </div>
+          </div>
+          <p class="page-desc">工具启动时自动检测本机环境，完成即进入扫描；检测只读取本机能力，不采集任何设备数据。</p>
+          <div class="card card-pad" style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+            <div id="sc-progress" style="display:flex;gap:8px;align-items:center;flex:1;flex-wrap:wrap"></div>
+            <span class="t-mini mono muted" id="sc-total">–</span>
+          </div>
+          <div class="card"><div class="rows" id="sc-rows"></div></div>
+          <div id="sc-footer" style="margin-top:14px"></div>
+          <div class="note" style="margin-top:16px"><span class="tico">ⓘ</span>
+            <div>「环境受限」与「没有设备」是不同状态：某通道受限时其余扫描源继续工作，受限通道在扫描页标注能力限制，而不是显示为空列表。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 1. 扫描设备 ========== -->
+      <section class="page" id="p-scan">
+        <div class="page-wrap">
+          <div class="page-head">
+            <div class="page-title">扫描设备</div>
+            <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="toggleQr()">扫码指引</button>
+            </div>
+          </div>
+          <p class="page-desc">并行扫描 BLE、设备 AP 与 CT-Disc；候选不是设备资产，仅存在于当前任务。列表里没有目标设备时，可直接扫码获取开启指引。</p>
+          <div class="card card-pad" id="scan-qr" style="display:none;margin-bottom:14px">
+            <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+              <div class="qr-frame">
+                <div class="qr-line"></div>
+                <span class="t-mini mono muted" id="qr-status">取景框对准设备机身二维码</span>
+              </div>
+              <div class="grow" style="min-width:240px">
+                <div style="font-weight:600;font-size:13px">扫码获取设备开启指引</div>
+                <div class="t-mini muted" style="margin:4px 0 10px">解析机身二维码（型号 · MAC 后缀 · 通道位图 · 指引编号），用于打开内置指引并定向重扫；不能凭二维码直接建立连接。</div>
+                <div id="qr-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-primary btn-sm" onclick="qrParse()">使用相机扫码</button>
+                  <button class="btn btn-secondary btn-sm" onclick="qrParse()">导入二维码图片</button>
+                </div>
+                <div id="qr-result" style="margin-top:10px"></div>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="row" style="cursor:default">
+              <span id="scan-srcs" style="display:flex;gap:14px"></span>
+              <span class="grow"></span>
+              <span class="t-mini muted">蓝牙适配器 · Intel AX201</span>
+              <button class="btn btn-secondary btn-xs" onclick="refreshScan()">刷新</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="rows" id="scan-rows"></div>
+          </div>
+          <p class="footer-hint">同时只处理一个配置连接；BUSY=1 的候选显示为不可配置。</p>
+        </div>
+      </section>
+
+      <!-- ========== 2. 未发现设备 ========== -->
+      <section class="page" id="p-empty">
+        <div class="page-wrap">
+          <div class="page-head"><div class="page-title">未发现设备</div></div>
+          <p class="page-desc">后台仍以低频继续扫描；可扫码获取设备进入配置模式的操作指引。</p>
+          <div class="empty">
+            <div class="empty-ico">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            </div>
+            <div style="font-weight:600">附近没有可配置设备</div>
+            <div class="t-mini muted" style="max-width:380px">已扫描 20 秒 · BLE 与设备 AP 均无结果。检查设备是否通电并处于配置窗口内。</div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <button class="btn btn-primary btn-sm" onclick="go('scan')">重新扫描</button>
+              <button class="btn btn-secondary btn-sm" onclick="openQrFromEmpty()">扫码获取开启指引</button>
+            </div>
+          </div>
+          <div class="note" style="margin-top:16px">
+            <span class="tico">ⓘ</span>
+            <div>「扫描不到」与「平台不允许扫描」是不同状态：权限受限时此处会显示系统能力限制，而不是空列表。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 3. 操作指引 ========== -->
+      <section class="page" id="p-guide">
+        <div class="page-wrap">
+          <div class="page-head"><div class="page-title">操作指引 · NE101</div></div>
+          <p class="page-desc">二维码只提供型号、MAC 后缀与指引编号；本页后台已按 NE101 + A1B2C3 定向扫描。</p>
+          <div class="card card-pad" style="max-width:520px">
+            <div class="kv"><span class="k t-code">型号</span><span class="mono t-code">NE101</span></div>
+            <div class="divider"></div>
+            <div class="kv"><span class="k t-code">MAC 后缀</span><span class="mono t-code">A1:B2:C3</span></div>
+            <div class="divider"></div>
+            <ol style="padding-left:18px;display:flex;flex-direction:column;gap:8px;font-size:13px;margin-top:4px">
+              <li>确认设备已通电（电量指示灯亮起）。</li>
+              <li>长按 CONFIG 键 <b>5 秒</b>，直到指示灯变为蓝色快闪。</li>
+              <li>保持设备与电脑距离在 2 米以内。</li>
+              <li>NeoLink 检测到目标后自动返回结果页并高亮。</li>
+            </ol>
+            <div class="divider"></div>
+            <div id="guide-scan"></div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+              <span class="t-mini muted">二维码只提供发现提示，连接后以设备实际能力为准。</span>
+              <span class="grow"></span>
+              <button class="btn btn-secondary btn-sm" onclick="guideFound()">我已完成，重新扫描</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 4. 建立连接（骨架屏） ========== -->
+      <section class="page" id="p-connect">
+        <div class="page-wrap">
+          <div class="page-head"><div class="page-title">建立连接</div></div>
+          <p class="page-desc" id="connect-desc">…</p>
+          <div style="display:flex;flex-direction:column;gap:10px;max-width:560px" id="connect-steps"></div>
+        </div>
+      </section>
+
+      <!-- ========== 5. 配置节（能力驱动） ========== -->
+      <section class="page" id="p-caps">
+        <div class="page-wrap">
+          <div class="page-head">
+            <div class="page-title">配置节</div>
+            <div class="page-actions">
+              <span class="badge b-success" id="caps-current"></span>
+              <button class="btn btn-primary btn-sm" onclick="go('deliver')">前往下发</button>
+            </div>
+          </div>
+          <p class="page-desc" id="caps-desc"></p>
+          <div class="grid-cards" id="caps-cards"></div>
+          <div class="note" style="margin-top:16px">
+            <span class="tico">ⓘ</span>
+            <div>页面完全由 <span class="mono t-code">communication.capabilities</span> 返回的 sections 驱动：未声明的节与字段不会出现。勾选「加入本次下发」的节将合并进同一次 <span class="mono t-code">config.set</span>。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 6. Wi-Fi / HaLow ========== -->
+      <section class="page" id="p-wifi">
+        <div class="page-wrap">
+          <div class="ptabs">
+            <div class="ptab active" data-tab="wf" onclick="wifiTab('wf')">Wi-Fi</div>
+            <div class="ptab" data-tab="hw" onclick="wifiTab('hw')">Wi-Fi HaLow</div>
+          </div>
+          <div class="two-col">
+            <div style="display:flex;flex-direction:column;gap:16px">
+              <div class="card">
+                <div class="row" style="cursor:default">
+                  <span class="label" style="font-weight:600">目标网络</span>
+                  <span class="grow"></span>
+                  <button class="btn btn-secondary btn-xs" id="wifi-scan-btn" onclick="runWifiScan()">扫描网络</button>
+                </div>
+                <div class="rows" id="wifi-aps"></div>
+              </div>
+              <div class="card card-pad">
+                <div class="form-grid" id="wifi-form"></div>
+              </div>
+            </div>
+            <div class="sticky-side" style="display:flex;flex-direction:column;gap:12px">
+              <div class="t-mini muted">config.set 载荷预览 · wifi 节</div>
+              <div class="jsonbox" id="wifi-json" style="font-size:11.5px"></div>
+              <div class="note"><span class="tico">ⓘ</span><div>安全方式由设备根据是否提供密码推断：省略密码即开放网络。</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 7. CAT1 / 蜂窝 ========== -->
+      <section class="page" id="p-cat1">
+        <div class="page-wrap">
+          <div class="page-head"><div class="page-title">CAT1 / 蜂窝</div></div>
+          <p class="page-desc">字段由能力声明门控——当前设备未声明的字段不会出现在表单中。</p>
+          <div class="two-col">
+            <div class="card card-pad">
+              <div class="form-grid" id="cat1-form"></div>
+            </div>
+            <div class="sticky-side" style="display:flex;flex-direction:column;gap:12px">
+              <div class="t-mini muted">config.set 载荷预览 · cellular 节</div>
+              <div class="jsonbox" id="cat1-json" style="font-size:11.5px"></div>
+              <div class="note" id="cat1-note"><span class="tico">ⓘ</span><div>免配置物联网卡设备的 cellular 节可声明 <span class="mono t-code">fields=[]</span>，页面只显示写入确认。</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 8. MQTT / Webhook ========== -->
+      <section class="page" id="p-svc">
+        <div class="page-wrap">
+          <div class="ptabs">
+            <div class="ptab active" data-tab="mqtt" onclick="svcTab('mqtt')">MQTT</div>
+            <div class="ptab" data-tab="webhook" onclick="svcTab('webhook')">Webhook</div>
+          </div>
+          <div class="two-col">
+            <div class="card card-pad">
+              <div class="form-grid" id="svc-form"></div>
+            </div>
+            <div class="sticky-side" style="display:flex;flex-direction:column;gap:12px">
+              <div class="t-mini muted" id="svc-json-label">config.set 载荷预览 · mqtt 节</div>
+              <div class="jsonbox" id="svc-json" style="font-size:11.5px"></div>
+              <div class="note"><span class="tico">ⓘ</span><div>服务节与网络节可在同一次请求提交；生效依赖设备联网成功，协议不做该依赖的校验或反馈。</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 9. config.set 下发 ========== -->
+      <section class="page" id="p-deliver">
+        <div class="page-wrap">
+          <div class="page-head">
+            <div class="page-title">下发配置</div>
+            <div class="page-actions">
+              <label class="check t-mini" style="font-weight:500">
+                <input type="checkbox" id="fail-inject" onchange="renderDeliver()">
+                注入未声明字段（演示 FIELD_NOT_SUPPORTED）
+              </label>
+            </div>
+          </div>
+          <p class="page-desc">单一请求-响应：<span class="mono t-code">ok=true</span> 即已校验并写入持久化存储；不验证联网生效。</p>
+          <div class="two-col">
+            <div style="display:flex;flex-direction:column;gap:16px">
+              <div class="card card-pad">
+                <div class="steps" id="dlv-steps"></div>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center">
+                <button class="btn btn-primary" id="dlv-btn" onclick="sendConfig()">发送 config.set</button>
+                <button class="btn btn-secondary btn-sm" onclick="go('caps')">调整所选节</button>
+                <span class="grow"></span>
+                <span class="t-mini muted">请求 id <span class="mono">20</span> · 加密链路</span>
+              </div>
+              <div id="dlv-resp"></div>
+            </div>
+            <div class="sticky-side" style="display:flex;flex-direction:column;gap:12px">
+              <div class="t-mini muted">config.set 请求</div>
+              <div class="jsonbox" id="dlv-json" style="font-size:11.5px"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 10. 下发结果 ========== -->
+      <section class="page" id="p-result">
+        <div class="page-wrap">
+          <div class="page-head"><div class="page-title">下发结果</div></div>
+          <div id="result-body"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ 模拟能力数据：NE101 与 NE301 两形态，演示同一 schema 的能力门控 ============ */
+const DEVICES = {
+  ne101: {
+    key: 'ne101', name: 'NE101-A1B2C3', model: 'NE101',
+    sn: 'NE101202610270001', fw: '1.8.0', power: ['battery'],
+    rssi: -52, apply: 'reconnect',
+    sections: [
+      { name: 'wifi', kind: 'network', configurable: true, scannable: true, fields: ['ssid', 'password'] },
+      { name: 'cellular', kind: 'network', configurable: true, fields: ['apn', 'username', 'password', 'pin', 'auth'] },
+      { name: 'halow', kind: 'network', configurable: true, scannable: true, fields: ['ssid', 'password', 'country'] },
+      { name: 'mqtt', kind: 'service', configurable: true, fields: ['enable', 'host', 'port', 'client_id', 'username', 'password', 'tls', 'topic', 'qos'] },
+      { name: 'webhook', kind: 'service', configurable: true, fields: ['enable', 'url', 'header'] },
+    ],
+    current: { network: 'wifi' },
+  },
+  ne301: {
+    key: 'ne301', name: 'NE301-84C102', model: 'NE301',
+    sn: 'NE301202610280012', fw: '2.1.0', power: ['external', 'poe'],
+    rssi: -67, apply: 'immediate',
+    sections: [
+      { name: 'wifi', kind: 'network', configurable: true, scannable: true, fields: ['ssid', 'password', 'bssid'] },
+      { name: 'cellular', kind: 'network', configurable: true, fields: ['apn', 'username', 'password', 'pin', 'auth', 'roaming'] },
+      { name: 'ethernet', kind: 'network', configurable: false, fields: [] },
+      { name: 'comm', kind: 'selector', configurable: true, fields: ['type'] },
+      { name: 'mqtt', kind: 'service', configurable: true, fields: ['enable', 'host', 'port', 'client_id', 'username', 'password', 'tls', 'topic', 'qos'] },
+      { name: 'webhook', kind: 'service', configurable: true, fields: ['enable', 'url', 'secret', 'header'] },
+    ],
+    current: { network: 'wifi' },
+  },
+};
+
+const FIELD_LABELS = {
+  ssid: 'SSID', password: '密码', bssid: 'BSSID（锁定 AP）',
+  apn: 'APN', username: '用户名', pin: 'PIN', auth: '认证方式', roaming: '允许漫游',
+  country: '国家/区域', type: '网络类型',
+  enable: '启用', host: 'Broker 地址', port: '端口', client_id: 'Client ID',
+  tls: 'TLS', topic: '上报主题', qos: 'QoS', url: '回调 URL', secret: '签名密钥', header: '附加请求头',
+};
+
+const KIND_BADGE = { network: ['b-cyan', 'network'], service: ['b-purple', 'service'], selector: ['b-indigo', 'selector'] };
+
+const APS_WIFI = [
+  { ssid: 'Office-2.4G', rssi: -48, ch: 6, sec: 'WPA2' },
+  { ssid: 'CT-Lab-5G', rssi: -57, ch: 36, sec: 'WPA2/WPA3' },
+  { ssid: 'Factory-Floor', rssi: -71, ch: 11, sec: 'WPA2' },
+  { ssid: 'Guest-Open', rssi: -78, ch: 1, sec: 'OPEN' },
+];
+const APS_HALOW = [
+  { ssid: 'CT-HaLow-S1', rssi: -62, ch: 1, sec: 'WPA3', country: 'CN' },
+  { ssid: 'Warehouse-H', rssi: -74, ch: 2, sec: 'WPA2', country: 'CN' },
+];
+
+/* ============ 状态 ============ */
+const state = {
+  dev: null, page: 'scan',
+  selected: {},            // 加入本次下发的节名 → true
+  forms: {
+    wifi: { ssid: '', password: '' },
+    halow: { ssid: '', password: '', country: 'CN' },
+    cellular: { apn: '', username: '', password: '', pin: '', auth: 'none', roaming: false },
+    comm: 'wifi',
+    mqtt: { enable: true, host: 'mqtt.example.com', port: 8883, client_id: '', username: 'device', password: '', tls: true, topic: '', qos: 1 },
+    webhook: { enable: true, url: 'https://ops.example.com/hooks/camera', secret: '', header: '' },
+  },
+  wifiTab: 'wf', svcTab: 'mqtt',
+  wifiScanned: {}, apSel: {},
+  failInject: false, lastResult: null,
+  scen: 'normal', sc: {}, scTimers: [], selfcheck: null,
+};
+
+/* ============ 工具 ============ */
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function jsonHL(obj) {
+  const s = JSON.stringify(obj, null, 2);
+  return esc(s)
+    .replace(/&quot;([^&]+)&quot;:/g, '<span class="jk">"$1"</span>:')
+    .replace(/: &quot;([^&]*)&quot;/g, ': <span class="js">"$1"</span>')
+    .replace(/: (\d+)/g, ': <span class="jn">$1</span>')
+    .replace(/: (true|false)/g, ': <span class="jb">$1</span>');
+}
+function rssiBars(v) {
+  const lvl = v >= -55 ? 4 : v >= -67 ? 3 : v >= -75 ? 2 : 1;
+  return `<span class="rssi">${[1,2,3,4].map(i => `<i class="${i <= lvl ? 'on' : ''}"></i>`).join('')}</span> <span class="t-mini muted mono">${v} dBm</span>`;
+}
+function sec(dev, name) { return dev.sections.find(s => s.name === name); }
+function hasField(dev, section, f) { const s = sec(dev, section); return !!(s && s.fields.includes(f)); }
+
+/* ============ 主题 ============ */
+function toggleTheme() {
+  const el = document.documentElement;
+  el.classList.toggle('dark');
+  const dark = el.classList.contains('dark');
+  $('#theme-ico').textContent = dark ? '☀' : '◐';
+  $('#theme-lbl').textContent = dark ? '浅色' : '深色';
+}
+
+/* ============ 导航 ============ */
+const FLOW = ['selfcheck', 'scan', 'empty', 'guide', 'connect', 'caps', 'wifi', 'cat1', 'svc', 'deliver', 'result'];
+const PRE_CONN = ['selfcheck', 'scan', 'empty', 'guide']; // 未连接设备即可访问的页面
+function go(page) {
+  const idx = FLOW.indexOf(page);
+  if (idx > 0 && !state.dev && !PRE_CONN.includes(page)) return; // 需要先连接设备
+  state.page = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
+  $('#p-' + page).classList.add('on');
+  document.querySelectorAll('.nav-item').forEach(n => {
+    const tp = n.dataset.page;
+    n.classList.toggle('active', tp === page);
+    if (!n.classList.contains('active')) n.classList.remove('locked');
+    if (idx >= FLOW.indexOf(tp)) n.classList.remove('locked');
+  });
+  if (page === 'selfcheck') renderSelfCheck();
+  if (page === 'guide') guideScan();
+  if (page === 'caps') renderCaps();
+  if (page === 'wifi') { renderWifiForm(); renderWifiAPs(); }
+  if (page === 'cat1') { renderCat1Form(); }
+  if (page === 'svc') { renderSvcForm(); }
+  if (page === 'deliver') renderDeliver();
+  if (page === 'result') renderResult();
+}
+
+/* ============ 1. 扫描 ============ */
+function renderScan() {
+  const scen = state.selfcheck ? state.selfcheck.scen : 'normal';
+  $('#scan-srcs').innerHTML =
+    (scen === 'fail'
+      ? '<span class="src-pill" style="color:var(--error)"><i class="src-dot"></i> BLE · 不可用</span>'
+      : '<span class="src-pill" style="color:var(--success)"><i class="src-dot dot-pulse"></i> BLE</span>') +
+    (scen === 'warn'
+      ? '<span class="src-pill" style="color:var(--warning)"><i class="src-dot dot-pulse"></i> 设备 AP · 受限</span>'
+      : '<span class="src-pill" style="color:var(--success)"><i class="src-dot dot-pulse"></i> 设备 AP</span>') +
+    '<span class="src-pill" style="color:var(--muted-foreground)"><i class="src-dot"></i> CT-Disc</span>';
+  const rows = Object.values(DEVICES).map(d => `
+    <div class="row" onclick="pickDev('${d.key}')">
+      <span class="badge ${d.model === 'NE101' ? 'b-info' : 'b-emerald'}">${d.model}</span>
+      <div class="grow">
+        <div class="mono t-code" style="font-weight:500">${d.name}</div>
+        <div class="t-mini muted">${d.sn} · 固件 ${d.fw} · ${d.power.includes('poe') ? '外部供电 / PoE' : d.power.includes('battery') ? '电池供电' : '外部供电'}</div>
+      </div>
+      ${rssiBars(d.rssi)}
+      <span class="badge b-success"><i class="dot"></i>可配置</span>
+      <span class="badge b-muted">BLE</span>
+      <span class="t-mini muted">刚刚</span>
+    </div>`).join('');
+  $('#scan-rows').innerHTML = rows + `
+    <div class="row" style="cursor:default;opacity:.55">
+      <span class="badge b-muted">NE301</span>
+      <div class="grow"><div class="mono t-code">NE301-90AF2D</div><div class="t-mini muted">正在被另一会话配置</div></div>
+      <span class="badge b-warning"><i class="dot"></i>BUSY</span>
+      <span class="badge b-muted">BLE</span>
+    </div>`;
+}
+function refreshScan() { renderScan(); }
+
+/* ---- 扫码指引（与扫描同页）：解析 → 内置指引 → 定向扫描 ---- */
+let qrTimers = [];
+function toggleQr(open) {
+  const el = $('#scan-qr');
+  const show = open === undefined ? el.style.display === 'none' : open;
+  el.style.display = show ? '' : 'none';
+  qrTimers.forEach(clearTimeout); qrTimers = [];
+  if (!show) {
+    $('#qr-result').innerHTML = ''; $('#qr-actions').style.display = '';
+    $('#qr-status').textContent = '取景框对准设备机身二维码';
+  }
+}
+function openQrFromEmpty() { go('scan'); toggleQr(true); }
+function qrParse() {
+  $('#qr-actions').style.display = 'none';
+  $('#qr-status').textContent = '识别中…';
+  qrTimers.push(setTimeout(() => {
+    $('#qr-status').textContent = '已解析';
+    $('#qr-result').innerHTML = `
+      <div class="kv"><span class="k mono t-code">URI</span><span class="mono t-code" style="font-size:11px;word-break:break-all">ctdev://guide-v1/A1B2C3?m=NE101&c=01&g=ne101_config_button_v1</span></div>
+      <div class="divider"></div>
+      <div class="kv"><span class="k t-code">解析</span><span>NE101 · <span class="mono t-code">A1:B2:C3</span> · 通道位图 c=01（BLE）</span></div>
+      <div class="note" style="margin-top:10px"><span class="tico">ⓘ</span><div>二维码只提供发现提示；正在打开内置指引，并按型号与 MAC 后缀定向扫描…</div></div>`;
+    qrTimers.push(setTimeout(() => go('guide'), 1100));
+  }, 1200));
+}
+
+/* ---- 指引页：定向扫描 → 目标出现并高亮 → 连接 ---- */
+let guideTimers = [];
+function guideScan() {
+  guideTimers.forEach(clearTimeout); guideTimers = [];
+  const d = DEVICES.ne101;
+  $('#guide-scan').innerHTML = `
+    <div class="row" style="cursor:default">
+      <span class="badge b-info"><i class="dot dot-pulse"></i> 定向扫描中</span>
+      <div class="grow">
+        <div style="font-weight:600;font-size:13px">目标 NE101 · <span class="mono t-code">A1:B2:C3</span></div>
+        <div class="t-mini muted">按二维码型号与 MAC 后缀过滤 BLE / 设备 AP / CT-Disc</div>
+      </div>
+      <div class="skel" style="width:110px;height:10px"></div>
+    </div>`;
+  guideTimers.push(setTimeout(() => {
+    $('#guide-scan').innerHTML = `
+      <div class="row" style="cursor:default;background:var(--success-bg)">
+        <span class="badge b-success"><i class="dot dot-pulse"></i> 检测到目标</span>
+        <div class="grow">
+          <div class="mono t-code" style="font-weight:500">${d.name}</div>
+          <div class="t-mini muted">${d.sn} · 固件 ${d.fw} · 来自定向扫描并高亮</div>
+        </div>
+        ${rssiBars(d.rssi)}
+        <button class="btn btn-primary btn-sm" onclick="pickDev('ne101')">连接此设备</button>
+      </div>`;
+  }, 2200));
+}
+
+/* ============ 4. 连接（骨架屏 → 就绪） ============ */
+function pickDev(key) {
+  state.dev = DEVICES[key];
+  state.selected = { wifi: true, mqtt: true };
+  $('#tb-dev').textContent = state.dev.name;
+  $('#tb-dev').className = 'badge b-success';
+  go('connect');
+  const steps = [
+    ['GATT 连接', 'connect / MTU 23 兼容'],
+    ['配对加密', 'no-bonding · Just Works 起步'],
+    ['读取 META', 'flags · device_name'],
+    ['订阅 D2C', 'Indication'],
+    ['device.info.get', '型号 / 固件 / 序列号'],
+    ['communication.capabilities.get', 'sections 能力'],
+  ];
+  const box = $('#connect-steps');
+  box.innerHTML = steps.map((s, i) => `
+    <div class="card card-pad" id="cstep-${i}" style="display:flex;align-items:center;gap:12px">
+      <div class="skel" style="width:20px;height:20px;border-radius:9999px"></div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+        <div class="skel" style="width:${120 + i * 18}px;height:12px"></div>
+        <div class="skel" style="width:${70 + i * 12}px;height:10px"></div>
+      </div>
+      <span class="t-mini mono muted">${s[1]}</span>
+    </div>`).join('');
+  $('#connect-desc').textContent = `正在连接 ${state.dev.name}（${state.dev.sn}）…`;
+  steps.forEach((s, i) => setTimeout(() => {
+    const el = $('#cstep-' + i);
+    if (el) el.innerHTML = `
+      <span style="color:var(--success);display:grid;place-items:center;width:20px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+      </span>
+      <div style="flex:1"><span style="font-weight:600;font-size:13px">${s[0]}</span></div>
+      <span class="t-mini mono muted">${s[1]}</span>`;
+  }, 260 * (i + 1)));
+  setTimeout(() => { $('#connect-desc').innerHTML = `连接就绪 · <span class="mono t-code">${state.dev.name}</span> 能力已读取`; go('caps'); }, 260 * steps.length + 500);
+}
+
+/* ============ 5. 配置节 ============ */
+function renderCaps() {
+  const d = state.dev;
+  $('#caps-desc').innerHTML = `<span class="mono t-code">${d.sn}</span> · 固件 ${d.fw} · 声明 ${d.sections.length} 个节。表单只呈现以下字段，未声明的一律不出现。`;
+  $('#caps-current').innerHTML = `<i class="dot"></i>当前网络 · ${d.current.network}`;
+  $('#caps-cards').innerHTML = d.sections.map(s => {
+    const [bc, kind] = KIND_BADGE[s.kind];
+    const cfg = s.configurable;
+    const openable = ['wifi', 'halow'].includes(s.name) ? 'wifi' : s.name === 'cellular' ? 'cat1' : ['mqtt', 'webhook'].includes(s.name) ? 'svc' : null;
+    const isSel = !!state.selected[s.name];
+    return `
+    <div class="card card-pad card-interactive" ${cfg && openable ? `onclick="go('${openable}')"` : ''}>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span class="mono" style="font-weight:700;font-size:13px">${s.name}</span>
+        <span class="badge ${bc}">${kind}</span>
+        <span style="flex:1"></span>
+        ${s.scannable ? '<span class="badge b-info">scannable</span>' : ''}
+        ${!cfg ? '<span class="badge b-muted">只读</span>' : ''}
+      </div>
+      <div class="chips">${s.fields.length ? s.fields.map(f => `<span class="chip">${f}</span>`).join('') : '<span class="t-mini muted">无字段</span>'}</div>
+      ${cfg ? `
+      <div class="divider" style="margin:12px 0"></div>
+      <label class="check t-mini" onclick="event.stopPropagation()">
+        <input type="checkbox" ${isSel ? 'checked' : ''} onchange="state.selected['${s.name}']=this.checked;renderDeliver()">
+        加入本次 config.set
+      </label>` : ''}
+    </div>`;
+  }).join('');
+}
+
+/* ============ 6. Wi-Fi / HaLow 表单 ============ */
+function wifiTab(t) {
+  state.wifiTab = t;
+  document.querySelectorAll('#p-wifi .ptab').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
+  renderWifiForm(); renderWifiAPs();
+}
+function runWifiScan() {
+  const key = state.wifiTab === 'wf' ? 'wifi' : 'halow';
+  state.wifiScanned[key] = true;
+  const btn = $('#wifi-scan-btn');
+  btn.disabled = true; btn.textContent = '扫描中…';
+  setTimeout(() => { btn.disabled = false; btn.textContent = '重新扫描'; renderWifiAPs(); }, 900);
+}
+function renderWifiAPs() {
+  const d = state.dev;
+  const key = state.wifiTab === 'wf' ? 'wifi' : 'halow';
+  const list = state.wifiTab === 'wf' ? APS_WIFI : APS_HALOW;
+  const box = $('#wifi-aps');
+  if (!state.wifiScanned[key]) {
+    box.innerHTML = `<div style="padding:22px 16px;text-align:center" class="t-mini muted">尚未扫描——点击右上「扫描网络」发起 communication.scan</div>`;
+    return;
+  }
+  box.innerHTML = list.map(a => `
+    <div class="row ${state.apSel[key] === a.ssid ? 'selected' : ''}" onclick="pickAP('${key}','${esc(a.ssid)}')">
+      <span style="color:var(--muted-foreground);display:grid;place-items:center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/></svg>
+      </span>
+      <div class="grow"><div class="mono t-code">${esc(a.ssid)}</div>
+        <div class="t-mini muted">信道 ${a.ch}${a.country ? ' · 区域 ' + a.country : ''}</div></div>
+      ${rssiBars(a.rssi)}
+      <span class="badge ${a.sec === 'OPEN' ? 'b-warning' : 'b-muted'}">${a.sec}</span>
+    </div>`).join('');
+}
+function pickAP(key, ssid) {
+  state.apSel[key] = ssid;
+  if (key === 'wifi') state.forms.wifi.ssid = ssid; else state.forms.halow.ssid = ssid;
+  renderWifiAPs(); renderWifiForm();
+}
+function wifiInput(section, f, type, ph, hint) {
+  const d = state.dev;
+  if (!hasField(d, section, f)) return '';
+  const v = state.forms[section][f];
+  return `
+    <div class="field ${['ssid', 'url'].includes(f) ? 'span2' : ''}">
+      <label class="label">${FIELD_LABELS[f] || f}</label>
+      <input class="input ${f === 'bssid' ? 'mono' : ''}" type="${type}" placeholder="${ph}" value="${esc(v)}"
+        oninput="state.forms['${section}']['${f}']=this.value;renderWifiJson()">
+      ${hint ? `<span class="hint">${hint}</span>` : ''}
+    </div>`;
+}
+function renderWifiForm() {
+  const key = state.wifiTab === 'wf' ? 'wifi' : 'halow';
+  $('#wifi-form').innerHTML = `
+    ${wifiInput(key, 'ssid', 'text', key === 'wifi' ? 'Office-2.4G 或隐藏网络 SSID' : 'CT-HaLow-S1')}
+    ${wifiInput(key, 'password', 'password', '8–63 字节；留空表示开放网络')}
+    ${wifiInput(key, 'bssid', 'text', 'AA:BB:CC:DD:EE:FF', '能力未声明时不出现（NE101 无此字段）')}
+    ${wifiInput(key, 'country', 'text', 'CN')}`;
+  renderWifiJson();
+}
+function wifiPayload() {
+  const d = state.dev;
+  const key = state.wifiTab === 'wf' ? 'wifi' : 'halow';
+  const s = sec(d, key);
+  const o = {};
+  s.fields.forEach(f => {
+    const v = state.forms[key][f];
+    if (f === 'password' && !v) return;
+    if (v !== '' && v !== undefined) o[f] = v;
+  });
+  return { [key]: o };
+}
+function renderWifiJson() { $('#wifi-json').innerHTML = jsonHL(wifiPayload()); }
+
+/* ============ 7. CAT1 表单 ============ */
+function renderCat1Form() {
+  const d = state.dev, f = state.forms.cellular;
+  const decl = (x) => hasField(d, 'cellular', x);
+  $('#cat1-form').innerHTML = `
+    <div class="field span2">
+      <label class="label">APN</label>
+      <input class="input mono" placeholder="cmiot.iot（留空 = 自动）" value="${esc(f.apn)}"
+        oninput="state.forms.cellular.apn=this.value;renderCat1Json()">
+      <span class="hint">免配置卡可留空</span>
+    </div>
+    ${decl('username') ? `
+    <div class="field"><label class="label">用户名</label>
+      <input class="input" value="${esc(f.username)}" oninput="state.forms.cellular.username=this.value;renderCat1Json()"></div>` : ''}
+    ${decl('password') ? `
+    <div class="field"><label class="label">密码</label>
+      <input class="input" type="password" value="${esc(f.password)}" oninput="state.forms.cellular.password=this.value;renderCat1Json()"></div>` : ''}
+    ${decl('pin') ? `
+    <div class="field"><label class="label">PIN</label>
+      <input class="input mono" placeholder="4–8 位数字" value="${esc(f.pin)}" oninput="state.forms.cellular.pin=this.value;renderCat1Json()"></div>` : ''}
+    ${decl('auth') ? `
+    <div class="field"><label class="label">认证方式</label>
+      <select class="input" onchange="state.forms.cellular.auth=this.value;renderCat1Json()">
+        ${['none', 'pap', 'chap', 'pap_or_chap'].map(a => `<option ${f.auth === a ? 'selected' : ''}>${a}</option>`).join('')}
+      </select></div>` : ''}
+    ${decl('roaming') ? `
+    <div class="field"><label class="label">允许漫游</label>
+      <div style="display:flex;align-items:center;gap:10px;height:36px">
+        <label class="switch"><input type="checkbox" ${f.roaming ? 'checked' : ''} onchange="state.forms.cellular.roaming=this.checked;renderCat1Json()"><span class="track"></span><span class="thumb"></span></label>
+        <span class="t-mini muted">仅声明 roaming 字段的设备显示（NE301）</span>
+      </div></div>` : ''}`;
+  renderCat1Json();
+}
+function cat1Payload() {
+  const d = state.dev, f = state.forms.cellular;
+  const o = {};
+  sec(d, 'cellular').fields.forEach(k => {
+    const v = f[k];
+    if (k === 'roaming') { if (v) o[k] = v; return; }
+    if (v !== '' && v !== undefined && !(k === 'auth' && v === 'none')) o[k] = v;
+  });
+  return { cellular: o };
+}
+function renderCat1Json() { $('#cat1-json').innerHTML = jsonHL(cat1Payload()); }
+
+/* ============ 8. 服务表单（MQTT / Webhook 子 tabs） ============ */
+function svcTab(t) {
+  state.svcTab = t;
+  document.querySelectorAll('#p-svc .ptab').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
+  renderSvcForm();
+}
+function renderSvcForm() {
+  const d = state.dev, t = state.svcTab, f = state.forms[t];
+  const decl = (x) => hasField(d, t, x);
+  $('#svc-json-label').textContent = `config.set 载荷预览 · ${t} 节`;
+  let html = '';
+  if (t === 'mqtt') {
+    html = `
+    <div class="field"><label class="label">启用 MQTT</label>
+      <div style="display:flex;align-items:center;gap:10px;height:36px">
+        <label class="switch"><input type="checkbox" ${f.enable ? 'checked' : ''} onchange="state.forms.mqtt.enable=this.checked;renderSvcForm()"><span class="track"></span><span class="thumb"></span></label>
+        <span class="t-mini muted">数据出口开关</span>
+      </div></div>
+    ${decl('tls') ? `
+    <div class="field"><label class="label">TLS</label>
+      <div style="display:flex;align-items:center;gap:10px;height:36px">
+        <label class="switch"><input type="checkbox" ${f.tls ? 'checked' : ''} onchange="state.forms.mqtt.tls=this.checked;renderSvcForm()"><span class="track"></span><span class="thumb"></span></label>
+        <span class="t-mini muted">启用时推荐端口 8883</span>
+      </div></div>` : ''}
+    ${['host'].map(k => `
+    <div class="field span2"><label class="label">Broker 地址</label>
+      <input class="input mono" value="${esc(f.host)}" oninput="state.forms.mqtt.host=this.value;renderSvcJson()"></div>`).join('')}
+    <div class="field"><label class="label">端口</label>
+      <input class="input mono" type="number" value="${f.port}" oninput="state.forms.mqtt.port=+this.value||0;renderSvcJson()"></div>
+    ${decl('qos') ? `
+    <div class="field"><label class="label">QoS</label>
+      <select class="input" onchange="state.forms.mqtt.qos=+this.value;renderSvcJson()">
+        ${[0, 1, 2].map(q => `<option ${f.qos === q ? 'selected' : ''}>${q}</option>`).join('')}
+      </select></div>` : ''}
+    ${decl('client_id') ? `
+    <div class="field"><label class="label">Client ID</label>
+      <input class="input mono" placeholder="留空 = 设备用 SN 生成" value="${esc(f.client_id)}" oninput="state.forms.mqtt.client_id=this.value;renderSvcJson()"></div>` : ''}
+    ${decl('username') ? `
+    <div class="field"><label class="label">用户名</label>
+      <input class="input" value="${esc(f.username)}" oninput="state.forms.mqtt.username=this.value;renderSvcJson()"></div>` : ''}
+    ${decl('password') ? `
+    <div class="field"><label class="label">密码</label>
+      <input class="input" type="password" value="${esc(f.password)}" oninput="state.forms.mqtt.password=this.value;renderSvcJson()"></div>` : ''}
+    ${decl('topic') ? `
+    <div class="field span2"><label class="label">上报主题</label>
+      <input class="input mono" placeholder="ct/<SN>/data" value="${esc(f.topic)}" oninput="state.forms.mqtt.topic=this.value;renderSvcJson()">
+      <span class="hint">不得包含 + / # 通配符</span></div>` : ''}`;
+  } else {
+    html = `
+    <div class="field"><label class="label">启用 Webhook</label>
+      <div style="display:flex;align-items:center;gap:10px;height:36px">
+        <label class="switch"><input type="checkbox" ${f.enable ? 'checked' : ''} onchange="state.forms.webhook.enable=this.checked;renderSvcForm()"><span class="track"></span><span class="thumb"></span></label>
+        <span class="t-mini muted">NE101 侧映射 push:mode=1</span>
+      </div></div>
+    <div class="field span2"><label class="label">回调 URL</label>
+      <input class="input mono" value="${esc(f.url)}" oninput="state.forms.webhook.url=this.value;renderSvcJson()">
+      <span class="hint">http/https 绝对 URI · ≤256 字节 · 推荐 https</span></div>
+    ${decl('secret') ? `
+    <div class="field span2"><label class="label">签名密钥 secret</label>
+      <input class="input" type="password" value="${esc(f.secret)}" oninput="state.forms.webhook.secret=this.value;renderSvcJson()">
+      <span class="hint">仅声明 secret 字段的设备显示（NE301）</span></div>` : ''}
+    ${decl('header') ? `
+    <div class="field span2"><label class="label">附加请求头</label>
+      <input class="input mono" placeholder="X-API-Key: abc123" value="${esc(f.header)}" oninput="state.forms.webhook.header=this.value;renderSvcJson()">
+      <span class="hint">Key: Value 格式</span></div>` : ''}`;
+  }
+  $('#svc-form').innerHTML = html;
+  renderSvcJson();
+}
+function svcPayload() {
+  const d = state.dev, t = state.svcTab, f = state.forms[t];
+  const o = {};
+  sec(d, t).fields.forEach(k => {
+    const v = f[k];
+    if (typeof v === 'boolean') { o[k] = v; return; }
+    if (v !== '' && v !== undefined) o[k] = v;
+  });
+  return { [t]: o };
+}
+function renderSvcJson() { $('#svc-json').innerHTML = jsonHL(svcPayload()); }
+
+/* ============ 9. 下发 ============ */
+function buildPayload() {
+  const d = state.dev;
+  const data = {};
+  if (state.selected.wifi && sec(d, 'wifi')) {
+    const f = state.forms.wifi, o = {};
+    sec(d, 'wifi').fields.forEach(k => { const v = f[k]; if (k === 'password' && !v) return; if (v) o[k] = v; });
+    if (Object.keys(o).length) data.wifi = o;
+  }
+  if (state.selected.cellular && sec(d, 'cellular')) Object.assign(data, cat1Payload());
+  if (state.selected.webhook && sec(d, 'webhook')) {
+    const f = state.forms.webhook, o = {};
+    sec(d, 'webhook').fields.forEach(k => { const v = f[k]; if (typeof v === 'boolean') { o[k] = v; return; } if (v) o[k] = v; });
+    data.webhook = o;
+  }
+  if (state.selected.mqtt && sec(d, 'mqtt')) {
+    const f = state.forms.mqtt, o = {};
+    sec(d, 'mqtt').fields.forEach(k => { const v = f[k]; if (typeof v === 'boolean') { o[k] = v; return; } if (v !== '' && v !== undefined) o[k] = v; });
+    data.mqtt = o;
+  }
+  if (state.failInject) {
+    // 演示：给能力未声明的字段注入值 → FIELD_NOT_SUPPORTED，整个请求不写入
+    if (!sec(d, 'webhook')) data.webhook = { enable: true, url: 'https://x.example.com/h' };
+    else if (!hasField(d, 'webhook', 'secret'))
+      data.webhook = Object.assign({ enable: true, url: 'https://ops.example.com/hooks/camera' }, data.webhook || {}, { secret: 'whsec_demo' });
+    else data.wifi.bssid = 'AA:BB:CC:DD:EE:FF';
+  }
+  return { id: 20, op: 'config.set', data };
+}
+function renderDeliver() {
+  state.failInject = $('#fail-inject') && $('#fail-inject').checked;
+  $('#dlv-json').innerHTML = jsonHL(buildPayload());
+  $('#dlv-steps').innerHTML = ['发送 config.set', '设备校验', '写入持久化', '返回响应']
+    .map(s => `<div class="step"><div class="snode">·</div><div class="slabel">${s}</div></div>`).join('');
+  $('#dlv-resp').innerHTML = '';
+  $('#dlv-btn').disabled = false;
+}
+function sendConfig() {
+  const steps = document.querySelectorAll('#dlv-steps .step');
+  $('#dlv-btn').disabled = true;
+  const fail = state.failInject;
+  steps.forEach((st, i) => setTimeout(() => {
+    st.classList.add('done');
+    st.querySelector('.snode').textContent = '✓';
+    if (fail && i === 1) {
+      st.classList.remove('done'); st.classList.add('err');
+      st.querySelector('.snode').textContent = '✕';
+    }
+  }, 420 * (i + 1)));
+  setTimeout(() => {
+    const req = buildPayload();
+    if (fail) {
+      state.lastResult = { ok: false, req, resp: { id: 20, op: 'config.set.result', ok: false, error: { code: 'FIELD_NOT_SUPPORTED', message: 'webhook.secret not declared in capabilities' } } };
+      $('#dlv-resp').innerHTML = `
+        <div class="note err"><span class="tico">✕</span>
+          <div><b>FIELD_NOT_SUPPORTED</b> — 请求包含能力未声明的字段。<br>
+          <span class="t-mini">按全有或全无规则，整个请求未写入任何节。修改后可直接重发，无需回滚。</span></div>
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="go('caps')">返回修改所选节</button>`;
+    } else {
+      const stored = Object.keys(req.data);
+      state.lastResult = { ok: true, req, resp: { id: 20, op: 'config.set.result', ok: true, data: { stored, apply: state.dev.apply } }, stored };
+      $('#dlv-resp').innerHTML = `
+        <div class="note"><span class="tico">✓</span>
+          <div><b>已持久化</b> — stored: ${stored.map(s => `<span class="chip">${s}</span>`).join(' ')} · apply: <b>${state.dev.apply}</b><br>
+          <span class="t-mini">协议到此为止：不验证联网生效，不订阅后续状态。</span></div>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="go('result')">查看下发结果</button>`;
+    }
+  }, 420 * 4 + 200);
+}
+
+/* ============ 10. 结果 ============ */
+function renderResult() {
+  const r = state.lastResult, d = state.dev;
+  if (!r) { $('#result-body').innerHTML = '<div class="empty"><div class="empty-ico">…</div><div>尚未下发配置</div></div>'; return; }
+  if (!r.ok) {
+    $('#result-body').innerHTML = `
+      <div class="card card-pad" style="max-width:640px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <span class="badge b-error"><i class="dot"></i>下发失败</span>
+          <span class="grow"></span><span class="t-mini mono muted">${d.name}</span>
+        </div>
+        <div class="kv"><span class="k mono t-code">error.code</span><span class="mono t-code" style="color:var(--error)">${r.resp.error.code}</span></div>
+        <div class="divider"></div>
+        <div class="kv"><span class="k mono t-code">error.message</span><span class="t-body">${esc(r.resp.error.message)}</span></div>
+        <div class="divider"></div>
+        <div class="note warn" style="margin-top:4px"><span class="tico">!</span>
+          <div>全有或全无：任一节校验失败时整个请求不写入。表单内容仍在内存中，修改后直接重发。</div></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-primary btn-sm" onclick="go('deliver')">修改并重发</button>
+          <button class="btn btn-secondary btn-sm" onclick="go('scan')">扫描下一台</button>
+        </div>
+      </div>`;
+    return;
+  }
+  const APPLY_TXT = { immediate: '立即应用', reconnect: '下次联网时应用', reboot: '重启后应用' };
+  $('#result-body').innerHTML = `
+    <div class="card card-pad" style="max-width:640px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <span class="badge b-success"><i class="dot"></i>配置已下发</span>
+        <span class="badge b-muted">${APPLY_TXT[r.resp.data.apply] || r.resp.data.apply}</span>
+        <span class="grow"></span><span class="t-mini mono muted">${d.name}</span>
+      </div>
+      <div class="kv"><span class="k mono t-code">serial_number</span><span class="mono t-code">${d.sn}</span></div>
+      <div class="divider"></div>
+      <div class="kv"><span class="k mono t-code">stored</span>
+        <span class="chips">${r.stored.map(s => `<span class="chip">${s}</span>`).join('')}</span></div>
+      <div class="divider"></div>
+      <div class="kv"><span class="k mono t-code">apply</span><span class="mono t-code">${r.resp.data.apply}</span>
+        <span class="t-mini muted" style="margin-left:8px">— 提示信息，应用时机由设备实现决定</span></div>
+      <div class="note" style="margin-top:14px"><span class="tico">ⓘ</span>
+        <div>协议不验证联网生效：设备是否成功连网、Broker 是否可达，由设备本地页面或云平台确认。重复提交相同配置为幂等覆盖，断线重连后直接重发即可。</div></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-primary btn-sm" onclick="go('caps')">继续配置其他节</button>
+        <button class="btn btn-secondary btn-sm" onclick="resetFlow()">扫描下一台</button>
+      </div>
+    </div>`;
+}
+function resetFlow() {
+  state.dev = null; state.lastResult = null; state.selected = {}; state.apSel = {}; state.wifiScanned = {};
+  $('#tb-dev').textContent = '未连接'; $('#tb-dev').className = 'badge b-muted';
+  renderScan(); go('scan');
+}
+function guideFound() { renderScan(); go('scan'); }
+
+/* ============ 0. 环境自检（启动自动执行） ============ */
+const SELFCHECKS = [
+  { key: 'ble-adapter', name: '蓝牙适配器', ms: 260, pass: '检测到 Intel AX201 · 支持 BLE 5.3' },
+  { key: 'ble-radio', name: '蓝牙无线电', ms: 200, pass: '已开启，可发起扫描', fail: '蓝牙已关闭 — 在系统设置中开启后重新检测' },
+  { key: 'ble-perm', name: '扫描权限', ms: 140, pass: 'Windows 无需额外授权（Android/iOS 需运行时申请）' },
+  { key: 'wifi-enum', name: 'Wi-Fi AP 枚举', ms: 300, pass: '接口可用，可枚举附近设备 AP', warn: '系统限制 AP 枚举 · 设备 AP 通道降级，BLE / CT-Disc 不受影响' },
+  { key: 'nic', name: '网卡与广播域', ms: 320, pass: '3 个物理网卡 · 2 个虚拟网卡已降权（CT-Disc 网卡选择可用）' },
+  { key: 'runtime', name: '运行环境', ms: 120, pass: 'Windows 11 23H2 · NeoLink v1.0.0 · CT-Prov/1' },
+];
+function scOutcome(it) {
+  if (state.scen === 'fail' && it.fail) return 'fail';
+  if (state.scen === 'warn' && it.warn) return 'warn';
+  return 'pass';
+}
+function scRow(it, st) {
+  const icon = {
+    pending: '<span class="dot" style="background:var(--muted-foreground)"></span>',
+    run: '<span class="dot dot-pulse" style="background:var(--info)"></span>',
+    pass: '<span style="color:var(--success)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg></span>',
+    warn: '<span style="color:var(--warning);font-weight:700;font-size:15px;line-height:1">!</span>',
+    fail: '<span style="color:var(--error)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg></span>',
+  }[st];
+  const badge = { pending: 'b-muted', run: 'b-info', pass: 'b-success', warn: 'b-warning', fail: 'b-error' }[st];
+  const label = { pending: '待检测', run: '检测中', pass: '通过', warn: '受限', fail: '失败' }[st];
+  const detail = st === 'run' ? '<div class="skel" style="width:230px;height:10px;margin-top:6px"></div>'
+    : st === 'pending' ? '等待前序检查完成'
+    : (st === 'pass' ? it.pass : it[st]);
+  return `
+    <div class="row" style="cursor:default">
+      ${icon}
+      <div class="grow">
+        <div style="font-weight:600;font-size:13px">${it.name}</div>
+        <div class="t-mini muted">${detail}</div>
+      </div>
+      <span class="badge ${badge}">${st === 'run' ? '<i class="dot dot-pulse"></i>' : ''}${label}</span>
+      <span class="t-mini mono muted" style="min-width:48px;text-align:right">${(st === 'pass' || st === 'warn' || st === 'fail') ? it.ms + ' ms' : ''}</span>
+    </div>`;
+}
+function renderSelfCheck() {
+  const sts = SELFCHECKS.map(it => state.sc[it.key] || 'pending');
+  const n = { pass: 0, warn: 0, fail: 0, run: 0, pending: 0 };
+  sts.forEach(s => n[s]++);
+  $('#sc-rows').innerHTML = SELFCHECKS.map((it, i) => scRow(it, sts[i])).join('');
+  $('#sc-progress').innerHTML =
+    `<span class="badge b-success">通过 ${n.pass}</span>` +
+    (n.warn ? `<span class="badge b-warning">受限 ${n.warn}</span>` : '') +
+    (n.fail ? `<span class="badge b-error">失败 ${n.fail}</span>` : '') +
+    (n.run ? `<span class="badge b-info"><i class="dot dot-pulse"></i>检测中</span>` : '') +
+    (n.pending && !n.run ? `<span class="badge b-muted">待检测 ${n.pending}</span>` : '');
+  $('#sc-total').textContent = `${SELFCHECKS.length} 项 · 本机环境`;
+}
+function runSelfCheck() {
+  state.scTimers.forEach(clearTimeout); state.scTimers = [];
+  state.sc = {}; state.selfcheck = null;
+  const sel = $('#scen-sel'); if (sel) sel.value = state.scen;
+  $('#sc-footer').innerHTML = '';
+  renderSelfCheck();
+  let t = 150;
+  SELFCHECKS.forEach((it, i) => {
+    state.scTimers.push(setTimeout(() => { state.sc[it.key] = 'run'; renderSelfCheck(); }, t));
+    t += it.ms;
+    const last = i === SELFCHECKS.length - 1;
+    state.scTimers.push(setTimeout(() => {
+      state.sc[it.key] = scOutcome(it); renderSelfCheck();
+      if (last) scFinish();
+    }, t));
+    t += 120;
+  });
+}
+function scFinish() {
+  state.selfcheck = { scen: state.scen };
+  renderScan();
+  const hasFail = SELFCHECKS.some(it => state.sc[it.key] === 'fail');
+  const hasWarn = SELFCHECKS.some(it => state.sc[it.key] === 'warn');
+  if (hasFail) {
+    $('#sc-footer').innerHTML = `
+      <div class="note err"><span class="tico">✕</span><div><b>蓝牙通道不可用</b> — 无法通过 BLE 发现与配置设备。可修复后重新检测，或仅使用 CT-Disc / 设备 AP 通道继续。</div></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-primary btn-sm" onclick="scFixBle()">已开启蓝牙，重新检测</button>
+        <button class="btn btn-secondary btn-sm" onclick="go('scan')">仍要进入扫描</button>
+      </div>`;
+    return; // 失败不自动跳转，由用户决定
+  }
+  $('#sc-footer').innerHTML = `
+    <div class="note"><span class="tico">✓</span><div>${hasWarn ? '<b>1 项受限</b> · 设备 AP 通道降级，其余通道正常。' : '<b>环境就绪</b> · 全部检查通过。'} 正在自动进入扫描…</div></div>`;
+  state.scTimers.push(setTimeout(() => { if (state.page === 'selfcheck') go('scan'); }, 1100));
+}
+function scFixBle() { state.scen = 'normal'; runSelfCheck(); }
+
+/* ============ 初始化 ============ */
+renderScan();
+go('selfcheck');
+runSelfCheck();   // 工具一打开自动完成环境自检
+</script>
+</body>
+</html>
