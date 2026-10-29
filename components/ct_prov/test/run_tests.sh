@@ -24,6 +24,14 @@ mkdir -p build
 
 "$CC" -std=c11 -Wall -Wextra -Werror \
     -fsanitize=address,undefined -fno-omit-frame-pointer -g \
+    -I../include -I. \
+    test_adv.c ../src/ct_prov_adv.c \
+    -o build/test_adv
+
+./build/test_adv
+
+"$CC" -std=c11 -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -g \
     -I../include -I. -I"$CJSON_DIR" \
     test_envelope.c ../src/ct_prov_envelope.c "$CJSON_DIR/cJSON.c" \
     -o build/test_envelope

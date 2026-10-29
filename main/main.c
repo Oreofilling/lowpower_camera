@@ -43,7 +43,7 @@
 #include "utils.h"
 #include "storage.h"
 #include "session_log.h"
-#include "ble_prov_demo.h"
+#include "ct_prov_app.h"
 
 #define TAG "-->MAIN"
 
@@ -412,9 +412,9 @@ static void handle_config_mode(snapType_e snapType, QueueHandle_t xQueueMqtt)
     http_open();
     sleep_reset_wakeup_todo();
     netModule_open(main_mode);
-    esp_err_t ble_err = ble_prov_demo_start();
+    esp_err_t ble_err = ct_prov_app_start();
     if (ble_err != ESP_OK) {
-        ESP_LOGW(TAG, "BLE demo unavailable: %s; softAP remains active",
+        ESP_LOGW(TAG, "CT-Prov server unavailable: %s; softAP remains active",
                  esp_err_to_name(ble_err));
     }
     camera_open(NULL, xQueueMqtt);
@@ -423,7 +423,7 @@ static void handle_config_mode(snapType_e snapType, QueueHandle_t xQueueMqtt)
     }
     sleep_wait_event_bits(SLEEP_SNAPSHOT_STOP_BIT | SLEEP_STORAGE_UPLOAD_STOP_BIT | 
                           SLEEP_NO_OPERATION_TIMEOUT_BIT | SLEEP_MIP_DONE_BIT | SLEEP_NO_DEBUG_BIT, true);
-    ble_prov_demo_stop();
+    ct_prov_app_stop();
 }
 
 /**
