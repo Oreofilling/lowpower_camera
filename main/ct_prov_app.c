@@ -148,11 +148,13 @@ esp_err_t ct_prov_app_start(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Doc 4.2.2: model codes are a fixed registry; 0x00/0xFF forbidden. */
+    /* Doc 4.2.2: model codes are a fixed registry; 0x00/0xFF forbidden.
+     * Factory model may carry a family suffix (e.g. "NE101-P"); the code
+     * maps by family prefix, the full model string stays in device_name. */
     uint8_t model_code;
-    if (strcmp(dev.model, "NE101") == 0) {
+    if (strncmp(dev.model, "NE101", 5) == 0) {
         model_code = 0x01;
-    } else if (strcmp(dev.model, "NE301") == 0) {
+    } else if (strncmp(dev.model, "NE301", 5) == 0) {
         model_code = 0x02;
     } else {
         ESP_LOGE(TAG, "model '%s' has no CT-Prov model code", dev.model);
@@ -168,15 +170,32 @@ esp_err_t ct_prov_app_start(void)
     mac_str2hex(dev.mac, mac);
 
     /* Doc 4.2.1: device_name = MODEL + '-' + last 3 MAC bytes in display
-     * order. The %.5s precision states the strcmp-verified model length to
-     * the compiler (5+1+6+1 fits NAME_MAX with room). ct_prov_ble_start
-     * re-validates the full name rules. */
+     * order; MODEL is a single 2-10 uppercase-alnum segment (no interior
+     * dash), so a factory model with a family suffix ("NE101-P")
+     * advertises by family segment. device.info.get still reports the
+     * full factory model. Whether variant names enter the protocol is an
+     * open spec question; the registry maps by family prefix. */
+    size_t family_len = strcspn(dev.model, "-");
+    if (family_len < 2 || family_len > 10) {
+        ESP_LOGE(TAG, "model '%s' has no valid family segment", dev.model);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    char family[11];
+    memcpy(family, dev.model, family_len);
+    family[family_len] = '\0';
+
     ct_prov_ble_identity_t identity = {
         .model_code = model_code,
         .mac_suffix = {mac[3], mac[4], mac[5]},
     };
-    snprintf(identity.device_name, sizeof(identity.device_name),
-             "%.5s-%02X%02X%02X", dev.model, mac[3], mac[4], mac[5]);
+    char name[24];
+    const int n = snprintf(name, sizeof(name), "%s-%02X%02X%02X",
+                           family, mac[3], mac[4], mac[5]);
+    if (n < 0 || (size_t)n >= sizeof(identity.device_name)) {
+        ESP_LOGE(TAG, "family '%s' yields an over-long device name", family);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    memcpy(identity.device_name, name, (size_t)n + 1);
 
     s_dev = dev;
     s_identity = identity;
