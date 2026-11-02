@@ -679,10 +679,12 @@ esp_err_t ct_prov_ble_start(const ct_prov_ble_identity_t *identity,
      * deliberate: OS-level pairing APIs (Windows PairAsync, Android
      * createBond) report failure when the peripheral offers no key to
      * store, so a no-bonding posture breaks every system pairing path.
-     * The Security Manager itself is compiled in via
-     * CONFIG_BT_NIMBLE_SECURITY_ENABLE (Kconfig-only in this NimBLE;
-     * ble_hs_cfg has no sm enable member). */
-    ble_hs_cfg.sm_sc = 1;
+     * SC stays off for now: with it on, pairing against a Realtek USB
+     * dongle (Windows 10) died mid-procedure and took the link with it;
+     * legacy Just Works meets the doc's floor.  The Security Manager
+     * itself is compiled in via CONFIG_BT_NIMBLE_SECURITY_ENABLE
+     * (Kconfig-only in this NimBLE; ble_hs_cfg has no sm enable member). */
+    ble_hs_cfg.sm_sc = 0;
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
     ble_hs_cfg.sm_bonding = 1;
     ble_hs_cfg.sm_mitm = 0;
