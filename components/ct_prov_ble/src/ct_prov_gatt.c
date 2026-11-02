@@ -4,8 +4,11 @@
  * Pipeline: C2D write -> fragment assembler -> envelope decode -> app
  * handler -> envelope encode -> fragment slicer -> D2C indication, one
  * frame in flight at a time (confirmed via BLE_GAP_EVENT_NOTIFY_TX).
- * Security per doc 4.4: C2D requires an encrypted link, Just Works with LE
- * Secure Connections and no bonding. session.close is answered by the
+ * Security per doc 4.4: C2D requires an encrypted link.  Bonding with LTK
+ * distribution is enabled because OS-level pairing (Windows PairAsync,
+ * Android createBond) only reports success when it can store a key; the
+ * device also sends the SMP security request on connect so encryption does
+ * not depend on the client volunteering.  session.close is answered by the
  * server and followed by a disconnect once the response drains (doc 11).
  */
 #include "ct_prov_ble.h"
@@ -22,6 +25,8 @@
 
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
+#include "host/ble_sm.h"
+#include "host/ble_store.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -424,6 +429,17 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_conn_handle = event->link_estab.conn_handle;
         session_reset();
         ESP_LOGI(TAG, "client connected, handle=%u", s_conn_handle);
+        /* Doc 4.4: credentials need an encrypted link.  As the peripheral
+         * this sends the SMP security request, so the central pairs and
+         * encrypts immediately instead of waiting for its app to call a
+         * system pairing API (which Windows forgets to do until asked). */
+        int sec_rc = ble_gap_security_initiate(s_conn_handle);
+        if (sec_rc != 0) {
+            /* Not fatal: an already-encrypted link or a central that starts
+             * pairing on its own makes this redundant; genuine failures
+             * still surface at the C2D encryption check below. */
+            ESP_LOGW(TAG, "security initiate rc=%d", sec_rc);
+        }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
@@ -497,7 +513,16 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
-        /* No bonding: previous keys are never kept, so always re-pair. */
+        /* The peer paired although a bond exists (typically the client lost
+         * its key, e.g. after a device-side key clear).  Drop our stale
+         * copy and let the new procedure run. */
+        {
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(event->repeat_pairing.conn_handle,
+                                  &desc) == 0) {
+                ble_store_util_delete_peer(&desc.peer_id_addr);
+            }
+        }
         return BLE_GAP_REPEAT_PAIRING_RETRY;
 
     default:
@@ -627,17 +652,20 @@ esp_err_t ct_prov_ble_start(const ct_prov_ble_identity_t *identity,
 
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
-    /* Doc 4.4: encrypted link for credentials, Just Works as the floor,
-     * LE Secure Connections preferred, no bonding and no key distribution
-     * so nothing survives the connection. The Security Manager itself is
-     * compiled in via CONFIG_BT_NIMBLE_SECURITY_ENABLE (Kconfig-only in
-     * this NimBLE; ble_hs_cfg has no sm enable member). */
+    /* Doc 4.4: encrypted link for credentials, Just Works as the floor, LE
+     * Secure Connections preferred.  Bonding with LTK distribution is
+     * deliberate: OS-level pairing APIs (Windows PairAsync, Android
+     * createBond) report failure when the peripheral offers no key to
+     * store, so a no-bonding posture breaks every system pairing path.
+     * The Security Manager itself is compiled in via
+     * CONFIG_BT_NIMBLE_SECURITY_ENABLE (Kconfig-only in this NimBLE;
+     * ble_hs_cfg has no sm enable member). */
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
-    ble_hs_cfg.sm_bonding = 0;
+    ble_hs_cfg.sm_bonding = 1;
     ble_hs_cfg.sm_mitm = 0;
-    ble_hs_cfg.sm_our_key_dist = 0;
-    ble_hs_cfg.sm_their_key_dist = 0;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
