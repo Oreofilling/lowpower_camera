@@ -672,6 +672,11 @@ esp_err_t ct_prov_ble_start(const ct_prov_ble_identity_t *identity,
         return err;
     }
 
+    /* SMP pairing failures log only at DEBUG and the default runtime level
+     * is INFO, so without this the pairing trace stays invisible.  Requires
+     * CONFIG_LOG_MAXIMUM_LEVEL=4 in sdkconfig to compile the calls in. */
+    esp_log_level_set("NimBLE", ESP_LOG_DEBUG);
+
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
     /* Doc 4.4: encrypted link for credentials, Just Works as the floor, LE
