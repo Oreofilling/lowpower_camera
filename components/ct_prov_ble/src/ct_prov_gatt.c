@@ -279,6 +279,8 @@ static void handle_envelope(const uint8_t *payload, size_t len)
 
 /* ---- GATT access ------------------------------------------------------ */
 
+static void maybe_start_security(void);
+
 static int c2d_access(uint16_t conn_handle, uint16_t attr_handle,
                       struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -295,6 +297,9 @@ static int c2d_access(uint16_t conn_handle, uint16_t attr_handle,
     }
     if (!desc.sec_state.encrypted) {
         ESP_LOGW(TAG, "C2D write rejected: link not encrypted (doc 4.4)");
+        /* Client skipped the doc 3 sequence's pairing step: kick off the
+         * security procedure so a retry of this write lands encrypted. */
+        maybe_start_security();
         return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     }
 
@@ -346,8 +351,6 @@ static int d2c_access(uint16_t conn_handle, uint16_t attr_handle,
     return BLE_ATT_ERR_UNLIKELY;
 }
 
-static void maybe_start_security(void);
-
 static int meta_access(uint16_t conn_handle, uint16_t attr_handle,
                        struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -357,10 +360,7 @@ static int meta_access(uint16_t conn_handle, uint16_t attr_handle,
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
         return BLE_ATT_ERR_UNLIKELY;
     }
-    /* Doc 4.3: readable before pairing, so no encryption check here.  The
-     * read doubles as the encryption kick-off point (see
-     * maybe_start_security). */
-    maybe_start_security();
+    /* Doc 4.3: readable before pairing, so no encryption check here. */
     uint8_t meta[CT_PROV_META_MAX];
     const int n =
         ct_prov_meta_build(s_identity.device_name, s_flags, meta, sizeof(meta));
@@ -402,13 +402,14 @@ static const struct ble_gatt_svc_def s_services[] = {
 
 /* ---- GAP -------------------------------------------------------------- */
 
-/* Doc 4.4: credentials need an encrypted link.  The SMP security request
- * is sent on the first service touch (META read or D2C subscribe) instead
- * of at connection setup: firing it while the central is still running
- * GATT discovery races the two procedures on some stacks (observed: the
- * link dropped ~240 ms in on a Windows/Realtek host), while by first touch
- * the client has finished enumerating and is talking to this service.
- * One shot per connection. */
+/* Doc 4.4: credentials need an encrypted link, but doc 3 orders the open
+ * sequence meta -> subscribe -> MTU -> encrypt -> request.  The device
+ * therefore never volunteers the SMP security request mid-sequence: a
+ * pairing/encryption transition aborts the central's in-flight GATT
+ * operations (observed as E_ABORT on a Windows host's descriptor write).
+ * Instead the client pairs at its own step, and this kick is only the
+ * backstop for a client that skipped pairing and still attempts a C2D
+ * write.  One shot per connection. */
 static bool s_security_req_sent;
 
 static void maybe_start_security(void)
@@ -480,12 +481,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_d2c_indicate = event->subscribe.cur_indicate != 0;
             ESP_LOGI(TAG, "D2C indications %s",
                      s_d2c_indicate ? "enabled" : "disabled");
-            if (s_d2c_indicate) {
-                /* Second encryption kick-off point: clients that skip the
-                 * META read still trigger pairing on their first service
-                 * interaction (doc 4.4). */
-                maybe_start_security();
-            }
         }
         return 0;
 
