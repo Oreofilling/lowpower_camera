@@ -346,6 +346,8 @@ static int d2c_access(uint16_t conn_handle, uint16_t attr_handle,
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+static void maybe_start_security(void);
+
 static int meta_access(uint16_t conn_handle, uint16_t attr_handle,
                        struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -355,7 +357,10 @@ static int meta_access(uint16_t conn_handle, uint16_t attr_handle,
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
         return BLE_ATT_ERR_UNLIKELY;
     }
-    /* Doc 4.3: readable before pairing, so no encryption check here. */
+    /* Doc 4.3: readable before pairing, so no encryption check here.  The
+     * read doubles as the encryption kick-off point (see
+     * maybe_start_security). */
+    maybe_start_security();
     uint8_t meta[CT_PROV_META_MAX];
     const int n =
         ct_prov_meta_build(s_identity.device_name, s_flags, meta, sizeof(meta));
@@ -397,6 +402,32 @@ static const struct ble_gatt_svc_def s_services[] = {
 
 /* ---- GAP -------------------------------------------------------------- */
 
+/* Doc 4.4: credentials need an encrypted link.  The SMP security request
+ * is sent on the first service touch (META read or D2C subscribe) instead
+ * of at connection setup: firing it while the central is still running
+ * GATT discovery races the two procedures on some stacks (observed: the
+ * link dropped ~240 ms in on a Windows/Realtek host), while by first touch
+ * the client has finished enumerating and is talking to this service.
+ * One shot per connection. */
+static bool s_security_req_sent;
+
+static void maybe_start_security(void)
+{
+    if (s_security_req_sent) {
+        return;
+    }
+    s_security_req_sent = true;
+    const int rc = ble_gap_security_initiate(s_conn_handle);
+    if (rc != 0) {
+        /* Not fatal: an already-encrypted link or a central that pairs on
+         * its own makes this redundant; genuine failures still surface at
+         * the C2D encryption check. */
+        ESP_LOGW(TAG, "security initiate rc=%d", rc);
+    } else {
+        ESP_LOGI(TAG, "security request sent");
+    }
+}
+
 /* Reset everything that is scoped to one connection (doc 5: message_id
  * and event seq restart from 0 on each connection). */
 static void session_reset(void)
@@ -407,6 +438,7 @@ static void session_reset(void)
     s_partial_since_us = 0;
     taskEXIT_CRITICAL(&s_asm_mux);
     s_d2c_indicate = false;
+    s_security_req_sent = false;
     s_tx_active = false;
     s_close_after_tx = false;
     s_tx_len = 0;
@@ -429,17 +461,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_conn_handle = event->link_estab.conn_handle;
         session_reset();
         ESP_LOGI(TAG, "client connected, handle=%u", s_conn_handle);
-        /* Doc 4.4: credentials need an encrypted link.  As the peripheral
-         * this sends the SMP security request, so the central pairs and
-         * encrypts immediately instead of waiting for its app to call a
-         * system pairing API (which Windows forgets to do until asked). */
-        int sec_rc = ble_gap_security_initiate(s_conn_handle);
-        if (sec_rc != 0) {
-            /* Not fatal: an already-encrypted link or a central that starts
-             * pairing on its own makes this redundant; genuine failures
-             * still surface at the C2D encryption check below. */
-            ESP_LOGW(TAG, "security initiate rc=%d", sec_rc);
-        }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
@@ -459,6 +480,12 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_d2c_indicate = event->subscribe.cur_indicate != 0;
             ESP_LOGI(TAG, "D2C indications %s",
                      s_d2c_indicate ? "enabled" : "disabled");
+            if (s_d2c_indicate) {
+                /* Second encryption kick-off point: clients that skip the
+                 * META read still trigger pairing on their first service
+                 * interaction (doc 4.4). */
+                maybe_start_security();
+            }
         }
         return 0;
 
