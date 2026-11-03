@@ -1,12 +1,14 @@
 /**
  * @file ct_prov_app.c
  * @brief CT-Prov/1 application glue: device identity from factory config
- *        and request dispatch (protocol doc sections 4.2, 7, 12).
+ *        and request dispatch (protocol doc sections 4.2, 7-10, 12).
  *
  * The GATT server itself lives in components/ct_prov_ble; this file only
  * decides who the device is and how requests are answered. Factory info is
  * read from NVS once at start so the request callback stays off flash
- * (doc 13: callbacks must not block).
+ * (doc 13: callbacks must not block). The F2 operations (capabilities,
+ * config.get/set, scan) live in components/ct_prov_config and only reach
+ * NVS/Wi-Fi through the adapters below.
  */
 #include "ct_prov_app.h"
 
@@ -14,11 +16,14 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_wifi.h"
 
 #include "config.h"
 #include "utils.h"
 #include "ct_prov_ble.h"
+#include "ct_prov_config.h"
 #include "ct_prov_envelope.h"
+#include "net_module.h"
 
 #define TAG "-->CT_PROV_APP"
 
@@ -29,6 +34,153 @@
 
 static deviceInfo_t s_dev;
 static ct_prov_ble_identity_t s_identity;
+
+/* Data scratch shared by the F2 handlers. Static because the request
+ * callback runs on the 4096-byte NimBLE host task stack. */
+static char s_data_buf[3840];
+
+/* ---- NVS adapters for components/ct_prov_config ------------------------ */
+
+/* cfg_set_* log failures internally and give no status, so the store cannot
+ * report one; STORAGE_FAILED stays a component-level guard for stores that
+ * can (and for the host tests). */
+static int store_str(void *ctx, const char *key, const char *value)
+{
+    (void)ctx;
+    cfg_set_str(key, value);
+    return 0;
+}
+
+static int store_u8(void *ctx, const char *key, uint8_t value)
+{
+    (void)ctx;
+    cfg_set_u8(key, value);
+    return 0;
+}
+
+static int store_u32(void *ctx, const char *key, uint32_t value)
+{
+    (void)ctx;
+    cfg_set_u32(key, value);
+    return 0;
+}
+
+static const ct_prov_store_t s_store = {
+    .ctx = NULL, .write_str = store_str, .write_u8 = store_u8,
+    .write_u32 = store_u32};
+
+/* Reads fall back to the schema defaults: every u8 key defaults to 0 and
+ * the only u32 key is mqtt:port (CT_CONFIG_SCHEMA.md 10.1). A section is
+ * only emitted when its identity string is non-empty, so defaulted numerics
+ * never surface for an unconfigured section. */
+static void read_str(void *ctx, const char *key, char *out, size_t cap)
+{
+    (void)ctx;
+    cfg_get_str(key, out, cap, "");
+}
+
+static bool read_u8(void *ctx, const char *key, uint8_t *out)
+{
+    (void)ctx;
+    cfg_get_u8(key, out, 0);
+    return true;
+}
+
+static bool read_u32(void *ctx, const char *key, uint32_t *out)
+{
+    (void)ctx;
+    cfg_get_u32(key, out, 1883);
+    return true;
+}
+
+static const ct_prov_reader_t s_reader = {
+    .ctx = NULL, .read_str = read_str, .read_u8 = read_u8,
+    .read_u32 = read_u32};
+
+/* ---- Wi-Fi scan cache (doc 9) ------------------------------------------- */
+
+#define SCAN_CACHE_MAX 64
+
+/* Both arrays are static: 64 wifi_ap_record_t alone would blow the host
+ * task stack. */
+static ct_prov_scan_item_t s_scan_cache[SCAN_CACHE_MAX];
+static wifi_ap_record_t s_scan_raw[SCAN_CACHE_MAX];
+static size_t s_scan_count;
+
+/* Only the radio module reports "wifi" as scannable; on CAT1 hardware the
+ * config-mode Wi-Fi runs AP-only and cannot scan. */
+static bool wifi_scannable(void)
+{
+    return !netModule_is_cat1();
+}
+
+/* Doc 8 current.network: the section whose identity is configured on the
+ * hardware this unit actually carries. NULL when unconfigured. */
+static const char *current_network_name(void)
+{
+    char v[MAX_LEN_32];
+    if (netModule_is_cat1()) {
+        cfg_get_str(KEY_CAT1_APN, v, sizeof(v), "");
+        return v[0] != '\0' ? "cellular" : NULL;
+    }
+    cfg_get_str(KEY_WIFI_SSID, v, sizeof(v), "");
+    return v[0] != '\0' ? "wifi" : NULL;
+}
+
+/*
+ * Refresh the scan cache: one blocking all-channel scan (~1.5-2 s). This
+ * runs inside the NimBLE host task; the BLE controller keeps the link at
+ * the link layer while the host blocks, and the client simply waits for
+ * the response. SW coexistence shares the airtime between the radios.
+ * The cache is only refreshed on cursor-less requests so a cursor walk
+ * pages a stable array (doc 9); within one config-mode window an old
+ * cursor is either past the end (rejected as stale) or indexes the same
+ * SSID space, so the cross-connection invalidation rule is relaxed here.
+ * Returns 0 on success.
+ */
+static int scan_cache_refresh(void)
+{
+    s_scan_count = 0;
+    if (!wifi_scannable()) {
+        return -1;
+    }
+    const wifi_scan_config_t cfg = {.show_hidden = false};
+    if (esp_wifi_scan_start(&cfg, true) != ESP_OK) {
+        ESP_LOGW(TAG, "wifi scan failed on the radio");
+        return -1;
+    }
+    uint16_t n = SCAN_CACHE_MAX;
+    if (esp_wifi_scan_get_ap_records(&n, s_scan_raw) != ESP_OK) {
+        return -1;
+    }
+
+    /* esp returns records strongest-first; dedup by SSID keeps the first
+     * (strongest) hit and skips hidden (empty-SSID) networks. */
+    for (uint16_t i = 0; i < n && s_scan_count < SCAN_CACHE_MAX; i++) {
+        const wifi_ap_record_t *r = &s_scan_raw[i];
+        if (r->ssid[0] == '\0') {
+            continue;
+        }
+        bool dup = false;
+        for (size_t k = 0; k < s_scan_count; k++) {
+            if (strcmp(s_scan_cache[k].network_id, (const char *)r->ssid) ==
+                0) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) {
+            continue;
+        }
+        ct_prov_scan_item_t *item = &s_scan_cache[s_scan_count++];
+        strlcpy(item->network_id, (const char *)r->ssid,
+                sizeof(item->network_id));
+        item->signal = r->rssi;
+        item->channel = r->primary;
+        item->has_channel = true;
+    }
+    return 0;
+}
 
 /*
  * Append value at dst+off as a quoted, JSON-escaped string followed by a
@@ -118,7 +270,10 @@ static size_t error_response(int64_t id, const char *op, const char *code,
 
 /*
  * Request handler running in the NimBLE host task (doc 13). Only touches
- * the cached RAM copies of the factory info.
+ * the cached RAM copies of the factory info; the F2 handlers reach NVS and
+ * the Wi-Fi radio through the adapters above. Requests are serialized by
+ * the host task, so a scan can never land mid-write (doc 9 BUSY is
+ * unreachable by construction).
  */
 static size_t on_request(void *arg, const ct_prov_envelope_t *req, char *resp,
                          size_t cap)
@@ -135,7 +290,48 @@ static size_t on_request(void *arg, const ct_prov_envelope_t *req, char *resp,
         return error_response(req->id, "device.info.get", "INTERNAL_ERROR",
                               "device info unavailable", resp, cap);
     }
-    /* F1 ships device.info.get only; everything else is a typed refusal. */
+    if (strcmp(req->op, "communication.capabilities.get") == 0) {
+        return ct_prov_capabilities_response(
+            req->id, wifi_scannable(), current_network_name(), s_data_buf,
+            sizeof(s_data_buf), resp, cap);
+    }
+    if (strcmp(req->op, "config.get") == 0) {
+        return ct_prov_config_get_response(req->id, &s_reader, s_data_buf,
+                                           sizeof(s_data_buf), resp, cap);
+    }
+    if (strcmp(req->op, "config.set") == 0) {
+        return ct_prov_config_set_response(
+            req->id, req->data_json, &s_store, s_data_buf,
+            sizeof(s_data_buf), resp, cap);
+    }
+    if (strcmp(req->op, "communication.scan") == 0) {
+        char section[16];
+        bool has_cursor = false;
+        size_t cursor = 0;
+        if (ct_prov_scan_parse(req->data_json, section, sizeof(section),
+                               &has_cursor, &cursor) != 0) {
+            return error_response(req->id, "communication.scan",
+                                  "INVALID_ARGUMENT", "malformed scan request",
+                                  resp, cap);
+        }
+        const bool scannable = wifi_scannable();
+        if (strcmp(section, "wifi") != 0 || !scannable) {
+            return error_response(
+                req->id, "communication.scan", "SECTION_NOT_SUPPORTED",
+                scannable ? "section has no scan support"
+                          : "wifi radio unavailable on this hardware",
+                resp, cap);
+        }
+        if (!has_cursor && scan_cache_refresh() != 0) {
+            return error_response(req->id, "communication.scan",
+                                  "INTERNAL_ERROR", "wifi scan failed", resp,
+                                  cap);
+        }
+        return ct_prov_scan_page_response(
+            req->id, "wifi", has_cursor, cursor, s_scan_cache, s_scan_count,
+            s_data_buf, sizeof(s_data_buf), resp, cap);
+    }
+    /* Everything outside the shipped operation set is a typed refusal. */
     return error_response(req->id, req->op, "UNSUPPORTED_OPERATION",
                           "operation not implemented", resp, cap);
 }
