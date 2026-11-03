@@ -32,6 +32,10 @@
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "store/config/ble_store_config.h"
+
+/* ESP-IDF 5.1's NimBLE examples declare this library entry point locally. */
+void ble_store_config_init(void);
 
 #include "ct_prov_adv.h"
 #include "ct_prov_fragment.h"
@@ -402,14 +406,13 @@ static const struct ble_gatt_svc_def s_services[] = {
 
 /* ---- GAP -------------------------------------------------------------- */
 
-/* Doc 4.4: credentials need an encrypted link, but doc 3 orders the open
- * sequence meta -> subscribe -> MTU -> encrypt -> request.  The device
- * therefore never volunteers the SMP security request mid-sequence: a
- * pairing/encryption transition aborts the central's in-flight GATT
- * operations (observed as E_ABORT on a Windows host's descriptor write).
- * Instead the client pairs at its own step, and this kick is only the
- * backstop for a client that skipped pairing and still attempts a C2D
- * write.  One shot per connection. */
+/* Doc 4.4: credentials need an encrypted link.  The desktop client performs
+ * system pairing on a dedicated pre-open connection, before GATT discovery,
+ * so the peripheral must volunteer the SMP security request as soon as that
+ * connection is established.  This avoids the old discovery/CCCD race while
+ * still allowing Windows PairAsync to complete.  The C2D call remains a
+ * backstop for clients that skip the documented pairing step.  One shot per
+ * connection. */
 static bool s_security_req_sent;
 
 static void maybe_start_security(void)
@@ -452,16 +455,23 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
     switch (event->type) {
-    case BLE_GAP_EVENT_LINK_ESTAB:
-        if (event->link_estab.status != 0) {
+    case BLE_GAP_EVENT_CONNECT:
+        /* CONNECT is the canonical point at which the handle becomes valid.
+         * ESP-IDF's later LINK_ESTAB extension is emitted only after remote
+         * feature discovery, by which time a bonded peer may already have
+         * restored encryption and CCCDs; resetting state there loses those
+         * events.  LINK_ESTAB is also dispatched while the host lock is held,
+         * so initiating security from it can deadlock the NimBLE task. */
+        if (event->connect.status != 0) {
             ESP_LOGW(TAG, "connection failed, status=%d",
-                     event->link_estab.status);
+                     event->connect.status);
             advertise();
             return 0;
         }
-        s_conn_handle = event->link_estab.conn_handle;
+        s_conn_handle = event->connect.conn_handle;
         session_reset();
         ESP_LOGI(TAG, "client connected, handle=%u", s_conn_handle);
+        maybe_start_security();
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
@@ -516,8 +526,15 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             !event->notify_tx.indication || !s_tx_active) {
             return 0;
         }
-        if (event->notify_tx.status != 0 &&
-            event->notify_tx.status != BLE_HS_EDONE) {
+        /* NimBLE reports status=0 synchronously from
+         * ble_gatts_indicate_custom(): it means the ATT command was queued,
+         * not that the peer confirmed it.  Advancing here recursively calls
+         * indicate_custom before the first call has returned and wedges the
+         * host.  Only BLE_HS_EDONE is the indication acknowledgment. */
+        if (event->notify_tx.status == 0) {
+            return 0;
+        }
+        if (event->notify_tx.status != BLE_HS_EDONE) {
             tx_abort("indication not confirmed");
             return 0;
         }
@@ -679,6 +696,7 @@ esp_err_t ct_prov_ble_start(const ct_prov_ble_identity_t *identity,
 
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
     /* Doc 4.4: encrypted link for credentials, Just Works as the floor, LE
      * Secure Connections preferred.  Bonding with LTK distribution is
      * deliberate: OS-level pairing APIs (Windows PairAsync, Android
@@ -695,6 +713,11 @@ esp_err_t ct_prov_ble_start(const ct_prov_ble_identity_t *identity,
     ble_hs_cfg.sm_mitm = 0;
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+
+    /* Bonding is only useful when the host has key-store callbacks.  Without
+     * these, the SMP exchange can advertise bonding but cannot retain the LTK,
+     * which Windows reports as a failed system pairing. */
+    ble_store_config_init();
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
