@@ -35,6 +35,27 @@ typedef struct mdDebug {
 } mdDebug_t;
 
 static mdDebug_t g_debug = {0};
+
+/*
+ * Software-reset command. RST_SOFTWARE maps to MODE_CONFIG in the mode
+ * selector (main.c), so this doubles as the remote entry point into
+ * configuration mode for bench testing (no button press needed).
+ */
+static int do_restart_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    ESP_LOGI(TAG, "software reset (boots into config mode)");
+    esp_restart();
+    return ESP_OK; /* not reached */
+}
+
+static const esp_console_cmd_t s_restart_cmd = {
+    .command = "restart",
+    .help = "Software-reset the MCU (boots into config mode)",
+    .hint = NULL,
+    .func = &do_restart_cmd,
+};
 /* Console command history can be stored to and loaded from a file.
  * The easiest way to do this is to use FATFS filesystem on top of
  * wear_levelling library.
@@ -184,6 +205,7 @@ void debug_open(void)
     initialize_console();
     /* Register commands */
     esp_console_register_help_command();
+    esp_console_cmd_register(&s_restart_cmd);
     xTaskCreatePinnedToCore((TaskFunction_t)taskfunc, TAG, 8 * 1024, NULL, 6, NULL, 1);
     g_debug.isInit = true;
 }
