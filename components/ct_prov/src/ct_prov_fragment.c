@@ -140,10 +140,12 @@ ct_prov_feed_state_t ct_prov_assembler_feed(ct_prov_assembler_t *a,
     a->received += payload_len;
 
     if (index != (uint8_t)(a->fragment_count - 1)) {
-        /* Non-final fragments must carry exactly payload_max bytes. */
-        if (payload_len != a->payload_max) {
-            return reject(a, CT_PROV_REJECT_MALFORMED_FRAME, reason);
-        }
+        /* Non-final fragment size is NOT validated: the local MTU belief
+         * can differ from the link's negotiated value in either direction
+         * (e.g. Windows clients whose MTU query falls back to 23 while we
+         * slice at 256, or vice versa). Ordering, header identity and the
+         * 4096 cap above carry the correctness; "fill exactly payload_max"
+         * binds senders only (ct_prov_slice always does). */
         a->next_index = index + 1;
         return CT_PROV_FEED_ASSEMBLING;
     }

@@ -126,6 +126,71 @@ static void test_hanging_buffer(void)
     }
 }
 
+/* Real-device regression (NE101 + Windows client, 2026-11-04): a client
+ * whose MTU query fell back to 23 received fragments sliced at the link's
+ * actual MTU 256 (and vice versa is possible too). The assembler must not
+ * enforce its own payload_max on non-final fragments; ordering, header
+ * identity and the 4096 cap carry the correctness. Verified in both
+ * directions, mirroring fragment_test.dart. */
+static void feed_frames_sliced_at(const char *json, unsigned wire_mtu,
+                                  unsigned belief_mtu, const char *ctx)
+{
+    const size_t payload_len = strlen(json);
+    const unsigned stride =
+        wire_mtu - CT_PROV_ATT_HEADER_SIZE - CT_PROV_FRAGMENT_HEADER_SIZE +
+        CT_PROV_FRAGMENT_HEADER_SIZE;
+    const size_t count = ct_prov_slice_frame_count(payload_len, wire_mtu);
+    CHECK(count > 1, ctx, "fixture must span multiple fragments");
+    if (count < 2) {
+        return;
+    }
+    uint8_t *frames = malloc(count * stride);
+    unsigned *lens = malloc(count * sizeof(unsigned));
+    CHECK(frames != NULL && lens != NULL, ctx, "oom");
+    if (frames == NULL || lens == NULL) {
+        free(frames);
+        free(lens);
+        return;
+    }
+    CHECK(ct_prov_slice((const uint8_t *)json, payload_len, wire_mtu,
+                        CT_PROV_KIND_RESPONSE, 5, frames, stride, lens,
+                        count) == count,
+          ctx, "slice count");
+
+    ct_prov_assembler_t a;
+    CHECK(ct_prov_assembler_init(&a, belief_mtu) == 0, ctx,
+          "init at belief mtu %u", belief_mtu);
+    ct_prov_feed_state_t st = CT_PROV_FEED_ASSEMBLING;
+    for (size_t f = 0; f < count; f++) {
+        st = ct_prov_assembler_feed(&a, frames + f * stride, lens[f], NULL);
+        if (f < count - 1) {
+            CHECK(st == CT_PROV_FEED_ASSEMBLING, ctx,
+                  "frame %zu (%u B) must not be rejected at belief MTU %u",
+                  f, lens[f], belief_mtu);
+        }
+    }
+    CHECK(st == CT_PROV_FEED_ASSEMBLED, ctx, "final frame must assemble");
+    size_t got_len = 0;
+    const uint8_t *got = ct_prov_assembler_payload(&a, &got_len);
+    CHECK(got_len == payload_len && memcmp(got, json, payload_len) == 0,
+          ctx, "payload must round-trip");
+    free(frames);
+    free(lens);
+}
+
+static void test_mtu_mismatch_assembly(void)
+{
+    const char *json =
+        "{\"id\":2,\"op\":\"communication.capabilities.get.result\",\"ok\":true,"
+        "\"data\":{\"sections\":[{\"name\":\"wifi\",\"kind\":\"network\","
+        "\"configurable\":true,\"scannable\":true,\"fields\":[\"ssid\","
+        "\"password\"]},{\"name\":\"mqtt\",\"kind\":\"service\","
+        "\"configurable\":true,\"fields\":[\"enable\",\"host\",\"port\"]}],"
+        "\"current\":{\"network\":null}}}";
+    feed_frames_sliced_at(json, 256, 23, "mtu-mismatch-256-to-23");
+    feed_frames_sliced_at(json, 23, 247, "mtu-mismatch-23-to-247");
+}
+
 static void test_slice(void)
 {
     for (size_t i = 0; i < CT_PROV_FRAGMENT_VECTOR_COUNT; i++) {
@@ -212,6 +277,7 @@ int main(void)
     test_reassemble();
     test_reject();
     test_hanging_buffer();
+    test_mtu_mismatch_assembly();
     test_slice();
     test_slice_guards();
     test_message_id_sequencer();
