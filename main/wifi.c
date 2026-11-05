@@ -13,6 +13,7 @@
 #include "lwip/netdb.h"
 #include "iot_mip.h"
 #include "net_module.h"
+#include "ct_prov_ble.h"
 
 #define TAG "-->WIFI"  // Logging tag for WiFi module
 
@@ -195,7 +196,10 @@ static void wifi_cfg_sta(const char *ssid, const char *password)
 static void timer_cb(void *arg)
 {
     mdWifi_t *wifi = (mdWifi_t *)arg;
-    if (http_hasClient()) {
+    /* A CT-Prov GATT client is an active user even though it never joins
+     * the softAP: BLE provisioning must not trip the sleep timeout. Once
+     * it disconnects the idle count restarts from zero. */
+    if (http_hasClient() || ct_prov_ble_client_connected()) {
         wifi->apTimeoutSeconds = 0;
         return;
     }

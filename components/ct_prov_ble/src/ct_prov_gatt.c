@@ -789,3 +789,11 @@ esp_err_t ct_prov_ble_set_flags(uint8_t flags)
     }
     return ESP_OK;
 }
+
+bool ct_prov_ble_client_connected(void)
+{
+    /* Called from the config-mode idle timer task, while s_conn_handle is
+     * written by the NimBLE host task. A single aligned uint16_t read is
+     * atomic here, the same unlocked read watchdog_cb already relies on. */
+    return s_started && s_conn_handle != BLE_HS_CONN_HANDLE_NONE;
+}

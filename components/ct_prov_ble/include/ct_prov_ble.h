@@ -8,6 +8,7 @@
 #ifndef CT_PROV_BLE_H
 #define CT_PROV_BLE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -50,5 +51,13 @@ void ct_prov_ble_stop(void);
  * while a session is active.
  */
 esp_err_t ct_prov_ble_set_flags(uint8_t flags);
+
+/*
+ * True while a CT-Prov client holds a GATT connection. Config mode polls
+ * this from its idle timer so an active provisioning session counts as
+ * user presence and does not trip the no-operation sleep timeout; once
+ * the client disconnects, the caller's idle count restarts from zero.
+ */
+bool ct_prov_ble_client_connected(void);
 
 #endif /* CT_PROV_BLE_H */
