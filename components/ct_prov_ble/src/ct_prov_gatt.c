@@ -96,7 +96,10 @@ static int64_t s_partial_since_us;
 static uint8_t s_rx_frame[CT_PROV_FRAGMENT_HEADER_SIZE + CT_PROV_TX_PAYLOAD_MAX];
 
 /* Transmission: one logical packet, sliced on demand, one indication in
- * flight at a time. */
+ * flight at a time. Clients may pipeline requests (doc 5 allows several
+ * in flight), so a second response can be ready before the previous
+ * packet drained its final indication confirmation; it waits one deep
+ * here instead of being dropped. */
 static uint8_t s_tx_buf[CT_PROV_MAX_LOGICAL_PACKET];
 static size_t s_tx_len;
 static size_t s_tx_off;
@@ -107,6 +110,12 @@ static bool s_tx_active;
 static bool s_close_after_tx;
 static uint32_t s_evt_seq; /* protocol.error event seq (doc 6.4) */
 static char s_resp_buf[CT_PROV_MAX_LOGICAL_PACKET + 1];
+
+/* One-deep response queue, drained when the active packet completes. */
+static uint8_t s_pend_buf[CT_PROV_MAX_LOGICAL_PACKET];
+static size_t s_pend_len;
+static ct_prov_packet_kind_t s_pend_kind;
+static bool s_pending;
 
 static esp_timer_handle_t s_watchdog;
 
@@ -185,7 +194,23 @@ static void start_tx(const char *json, size_t len, ct_prov_packet_kind_t kind)
         return;
     }
     if (s_tx_active) {
-        tx_abort("previous packet still in flight");
+        /* Pipelined request: park this response behind the draining one.
+         * Never tx_abort() here - that would clear the active packet's
+         * state and kill it mid-flight. A third arrival while one is
+         * already parked is a client beyond one-deep pipelining; the
+         * earliest response keeps its place. */
+        if (s_pending || len > sizeof(s_pend_buf)) {
+            ESP_LOGE(TAG,
+                     "D2C packet dropped: pending queue full (%zu bytes)",
+                     len);
+            return;
+        }
+        memcpy(s_pend_buf, json, len);
+        s_pend_len = len;
+        s_pend_kind = kind;
+        s_pending = true;
+        ESP_LOGI(TAG, "D2C packet queued behind in-flight packet (%zu bytes)",
+                 len);
         return;
     }
     if (ct_prov_slice_frame_count(len, tx_effective_mtu()) == 0) {
@@ -445,6 +470,8 @@ static void session_reset(void)
     s_security_req_sent = false;
     s_tx_active = false;
     s_close_after_tx = false;
+    s_pending = false;
+    s_pend_len = 0;
     s_tx_len = 0;
     s_tx_off = 0;
     s_tx_seq = 0;
@@ -541,6 +568,19 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (s_tx_off >= s_tx_len) {
             s_tx_active = false;
             ESP_LOGI(TAG, "D2C packet delivered (%zu bytes)", s_tx_len);
+            if (s_pending) {
+                /* Drained: hand the queued response the slot. The message
+                 * id is assigned here, at actual transmission time. */
+                memcpy(s_tx_buf, s_pend_buf, s_pend_len);
+                s_tx_len = s_pend_len;
+                s_tx_off = 0;
+                s_tx_kind = s_pend_kind;
+                s_tx_msg_id = ct_prov_next_message_id(&s_tx_seq);
+                s_pending = false;
+                s_tx_active = true;
+                tx_send_next();
+                return 0;
+            }
             if (s_close_after_tx) {
                 s_close_after_tx = false;
                 ble_gap_terminate(s_conn_handle,
