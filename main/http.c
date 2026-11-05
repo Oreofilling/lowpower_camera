@@ -27,6 +27,7 @@
 #include "session_log.h"
 #include "utils.h"
 #include "pir.h"
+#include "ct_prov_app.h"
 
 #define TAG "-->HTTP"  // Logging tag for HTTP module
 
@@ -619,6 +620,40 @@ esp_err_t get_wifi_param_handle(httpd_req_t *req)
     httpd_resp_sendstr(req, str);
     cJSON_free(str);
     s2j_delete_json_obj(json_obj);
+    return ESP_OK;
+}
+
+/*
+ * CT-Prov softAP HTTP binding: one complete request envelope in, one
+ * response envelope out (same op set and semantics as the BLE transport,
+ * no fragmentation). Oversized or undecodable bodies answer 400.
+ */
+static char g_ctprov_resp[4096 + 1];
+
+static esp_err_t post_ctprov_handle(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "%s", req->uri);
+    clear_timeout();
+
+    if (req->content_len == 0 || req->content_len > sizeof(g_ctprov_resp)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_OK;
+    }
+    char *content = http_get_content_from_req(req);
+    if (content == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_OK;
+    }
+    const size_t n = ct_prov_app_handle_http(content, req->content_len,
+                                              g_ctprov_resp,
+                                              sizeof(g_ctprov_resp));
+    http_free_content(content);
+    if (n == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+    httpd_resp_send(req, g_ctprov_resp, n);
     return ESP_OK;
 }
 
@@ -1792,6 +1827,11 @@ esp_err_t set_push_mode_handle(httpd_req_t *req)
 }
 
 static const httpd_uri_t g_webHandlers[] = {
+    {
+        .uri = "/api/v1/ctprov",
+        .method = HTTP_POST,
+        .handler = post_ctprov_handle,
+    },
     {
         .uri = "/",
         .method = HTTP_GET,

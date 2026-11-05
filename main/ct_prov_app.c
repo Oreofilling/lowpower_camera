@@ -17,6 +17,8 @@
 
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "config.h"
 #include "utils.h"
@@ -34,10 +36,15 @@
 
 static deviceInfo_t s_dev;
 static ct_prov_ble_identity_t s_identity;
+static bool s_active;
 
 /* Data scratch shared by the F2 handlers. Static because the request
  * callback runs on the 4096-byte NimBLE host task stack. */
 static char s_data_buf[3840];
+
+/* Serializes dispatch between the NimBLE host task (BLE) and the httpd
+ * worker (softAP HTTP): both funnels share s_data_buf. */
+static SemaphoreHandle_t s_dispatch_mux;
 
 /* ---- NVS adapters for components/ct_prov_config ------------------------ */
 
@@ -275,10 +282,9 @@ static size_t error_response(int64_t id, const char *op, const char *code,
  * the host task, so a scan can never land mid-write (doc 9 BUSY is
  * unreachable by construction).
  */
-static size_t on_request(void *arg, const ct_prov_envelope_t *req, char *resp,
-                         size_t cap)
+static size_t dispatch_request(const ct_prov_envelope_t *req, char *resp,
+                               size_t cap)
 {
-    (void)arg;
     if (strcmp(req->op, "device.info.get") == 0) {
         char data[640];
         const size_t n = device_info_data(data, sizeof(data));
@@ -334,6 +340,62 @@ static size_t on_request(void *arg, const ct_prov_envelope_t *req, char *resp,
     /* Everything outside the shipped operation set is a typed refusal. */
     return error_response(req->id, req->op, "UNSUPPORTED_OPERATION",
                           "operation not implemented", resp, cap);
+}
+
+/*
+ * BLE request callback (doc 13): dispatch under the shared lock because
+ * the softAP HTTP binding runs the same handlers on the httpd worker.
+ */
+static size_t on_request(void *arg, const ct_prov_envelope_t *req, char *resp,
+                         size_t cap)
+{
+    (void)arg;
+    if (s_dispatch_mux == NULL) {
+        return error_response(req->id, req->op, "INTERNAL_ERROR",
+                              "dispatcher unavailable", resp, cap);
+    }
+    xSemaphoreTake(s_dispatch_mux, portMAX_DELAY);
+    const size_t n = dispatch_request(req, resp, cap);
+    xSemaphoreGive(s_dispatch_mux);
+    return n;
+}
+
+size_t ct_prov_app_handle_http(const char *body, size_t len, char *resp,
+                               size_t cap)
+{
+    if (!s_active || body == NULL || len == 0) {
+        return 0;
+    }
+
+    ct_prov_envelope_t env;
+    ct_prov_envelope_error_t err;
+    if (ct_prov_envelope_decode((const uint8_t *)body, len, &env, &err) !=
+            0 ||
+        env.kind != CT_PROV_ENV_REQUEST) {
+        /* No request id to echo: refuse with the envelope-level shape. */
+        return error_response(0, "protocol.error", "INVALID_MESSAGE",
+                              "body is not a CT-Prov request envelope", resp,
+                              cap);
+    }
+
+    size_t n;
+    if (strcmp(env.op, "session.close") == 0) {
+        /* Doc 11 lets the client close by ending the transport session.
+         * Over HTTP each request is its own connection: acknowledge and
+         * carry on; there is no link to terminate. */
+        n = ct_prov_envelope_encode_response(env.id, "session.close.result",
+                                             true, NULL, NULL, NULL, resp,
+                                             cap);
+    } else if (s_dispatch_mux == NULL) {
+        n = error_response(env.id, env.op, "INTERNAL_ERROR",
+                           "dispatcher unavailable", resp, cap);
+    } else {
+        xSemaphoreTake(s_dispatch_mux, portMAX_DELAY);
+        n = dispatch_request(&env, resp, cap);
+        xSemaphoreGive(s_dispatch_mux);
+    }
+    ct_prov_envelope_free(&env);
+    return n;
 }
 
 esp_err_t ct_prov_app_start(void)
@@ -395,10 +457,16 @@ esp_err_t ct_prov_app_start(void)
 
     s_dev = dev;
     s_identity = identity;
-    return ct_prov_ble_start(&s_identity, on_request, NULL);
+    if (s_dispatch_mux == NULL) {
+        s_dispatch_mux = xSemaphoreCreateMutex();
+    }
+    const esp_err_t rc = ct_prov_ble_start(&s_identity, on_request, NULL);
+    s_active = rc == ESP_OK;
+    return rc;
 }
 
 void ct_prov_app_stop(void)
 {
+    s_active = false;
     ct_prov_ble_stop();
 }
