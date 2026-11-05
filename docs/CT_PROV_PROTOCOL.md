@@ -714,7 +714,20 @@ stateDiagram-v2
 
 NE101、NE301 和 NeoLink 必须共享同一组 JSON、分片和状态机 Golden Vector。
 
-## 16. 参考文档
+## 16. 传输绑定:设备 softAP HTTP
+
+CT-Prov/1 的默认传输是 §4 的 BLE GATT。设备 softAP 提供等价的 HTTP 绑定,复用同一套信封(§6)、操作(§7-§10)、错误码(§12)与状态机(§14):
+
+- 端点:`POST /api/v1/ctprov`(设备 softAP 网关地址,当前 NE101 为 `192.168.1.1`)。
+- 请求体为一个完整的请求信封 JSON(上限 4096 字节),响应体为对应响应信封 JSON,`Content-Type: application/json`。
+- 不经过 §5 分片层:HTTP 请求体天然承载完整逻辑包。`message_id`、`fragment_*` 等 GATT-only 字段不出现。
+- `session.close` 同样永远成功;HTTP 下每个请求即一次完整传输会话,Server 不做连接断开动作,Client 结束即关闭 HTTP 连接,与 §11 的「直接断开等效」一致。
+- 链路安全由 softAP 接入本身承担(本版本 NE101 softAP 为开放网络,凭证经明文 HTTP 传输的风险与 §4.4 威胁模型中 Just Works 的被动嗅探面同级;后续版本可升级为 WPA2 + HTTPS)。
+- softAP 空闲计时把 HTTP 客户端与 CT-Prov BLE 连接同样视为「有用户在场」,任一存在即不触发无操作休眠(见 wifi.c AP 超时)。
+
+设备 SSID 约定(`NEOLINK_PRODUCT_FLOW.md` §5.2)为 `CT-AP-<MAC_SUFFIX>`;当前 NE101 固件沿用历史 SSID `<MODEL>_<MAC_SUFFIX>`(如 `NE101-P_BBC6DC`),切换为 `CT-AP-` 前缀属于产品命名决策,落地时以本节为准同步修改。
+
+## 17. 参考文档
 
 - [CT-Prov/1 配置数据结构](./CT_CONFIG_SCHEMA.md)
 - [NeoLink 产品与流程](./NEOLINK_PRODUCT_FLOW.md)
