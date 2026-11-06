@@ -718,7 +718,15 @@ NE101、NE301 和 NeoLink 必须共享同一组 JSON、分片和状态机 Golden
 
 CT-Prov/1 的默认传输是 §4 的 BLE GATT。设备 softAP 提供等价的 HTTP 绑定,复用同一套信封(§6)、操作(§7-§10)、错误码(§12)与状态机(§14):
 
-- 端点:`POST /api/v1/ctprov`(设备 softAP 网关地址,当前 NE101 为 `192.168.1.1`)。
+- 端点:`POST /api/v1/ctprov`(设备 softAP 自身地址,出厂配置模式下按型号固定):
+
+  | 型号 | softAP 地址 |
+  |---|---|
+  | NE101 | `192.168.1.1` |
+  | NE301 | `192.168.10.10` |
+  | NE503 | `10.0.0.1` |
+
+  Client 按 `device_name`/SSID 的型号前缀选择地址;无型号信息(如 `CT-AP-` SSID)时回退 NE101 参考地址。型号间地址不同网段,选错地址不可能得到 TCP 应答。
 - 请求体为一个完整的请求信封 JSON(上限 4096 字节),响应体为对应响应信封 JSON,`Content-Type: application/json`。
 - 不经过 §5 分片层:HTTP 请求体天然承载完整逻辑包。`message_id`、`fragment_*` 等 GATT-only 字段不出现。
 - `session.close` 同样永远成功;HTTP 下每个请求即一次完整传输会话,Server 不做连接断开动作,Client 结束即关闭 HTTP 连接,与 §11 的「直接断开等效」一致。
