@@ -4153,7 +4153,14 @@ esp_err_t usb_streaming_start()
     UVC_CHECK_GOTO(usbh_taskh != NULL, "Create usb processing task failed", free_resource_);
     xTaskCreatePinnedToCore(_usb_stream_handle_task, USB_STREAM_NAME, USB_STREAM_STACK_SIZE, NULL,
                             USB_STREAM_PRIORITY, &s_usb_dev.stream_task_hdl, USB_STREAM_CORE);
-    assert(s_usb_dev.stream_task_hdl != NULL); //can not handle this error, just assert
+    if (s_usb_dev.stream_task_hdl == NULL) {
+        /* Task creation fails when internal RAM is exhausted (e.g. camera
+         * started in config mode with BLE + softAP + HTTP all running).
+         * Fail like the processing-task path above instead of asserting. */
+        ESP_LOGE(TAG, "Create usb stream task failed");
+        vTaskDelete(usbh_taskh);
+        goto free_resource_;
+    }
     xTaskNotifyGive(usbh_taskh);
     xEventGroupWaitBits(s_usb_dev.event_group_hdl, USB_HOST_INIT_DONE, pdFALSE, pdFALSE, portMAX_DELAY);
     ESP_LOGI(TAG, "USB Streaming Start Succeed");
