@@ -1,4 +1,5 @@
 #include "config.h"
+#include "mmregdb.h"
 #include "debug.h"
 #include "system.h"
 #include "sleep.h"
@@ -529,6 +530,86 @@ void cfg_dump()
 }
 
 /*--------------------------debug--------------------------------------*/
+static void cfg_dump_userspace(void)
+{
+    nvs_iterator_t it = NULL;
+    esp_err_t ret = nvs_entry_find(NVS_CFG_PARTITION, NVS_USER_NAMESPACE, NVS_TYPE_ANY, &it);
+
+    if (ret != ESP_OK) {
+        printf("No userspace entries found\n");
+        return;
+    }
+    while (ret == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        printf("%s = ", info.key);
+        get_value_from_nvs(info.namespace_name, info.key, info.type);
+        ret = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+}
+
+static esp_err_t uset_find_key_type(const char *key, nvs_type_t *type)
+{
+    nvs_iterator_t it = NULL;
+    esp_err_t ret = nvs_entry_find(NVS_CFG_PARTITION, NVS_USER_NAMESPACE, NVS_TYPE_ANY, &it);
+
+    while (ret == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        if (strcmp(info.key, key) == 0) {
+            *type = info.type;
+            nvs_release_iterator(it);
+            return ESP_OK;
+        }
+        ret = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+    return ESP_ERR_NVS_NOT_FOUND;
+}
+
+static int do_uset_cmd(int argc, char **argv)
+{
+    if (argc < 2) {
+        cfg_dump_userspace();
+        return ESP_OK;
+    }
+
+    if (strcmp(argv[1], "erase") == 0) {
+        if (argc < 3) {
+            printf("usage: uset erase <key>\n");
+            return ESP_OK;
+        }
+        cfg_erase_key(argv[2]);
+        printf("erased %s\n", argv[2]);
+        return ESP_OK;
+    }
+
+    if (argc == 2) {
+        nvs_type_t type;
+        if (uset_find_key_type(argv[1], &type) != ESP_OK) {
+            printf("key not found: %s\n", argv[1]);
+            return ESP_OK;
+        }
+        get_value_from_nvs(NVS_USER_NAMESPACE, argv[1], type);
+        return ESP_OK;
+    }
+
+    char value[MAX_LEN_256] = {0};
+    for (int i = 2; i < argc; i++) {
+        if (i > 2) {
+            strncat(value, " ", sizeof(value) - strlen(value) - 1);
+        }
+        strncat(value, argv[i], sizeof(value) - strlen(value) - 1);
+    }
+    if (strcmp(argv[1], KEY_MQTT_HOST) == 0) {
+        strip_mqtt_scheme(value);
+    }
+    cfg_set_str(argv[1], value);
+    printf("set %s = %s\n", argv[1], value);
+    return ESP_OK;
+}
+
 static int do_fset_cmd(int argc, char **argv)
 {
     const char *key[] = {KEY_DEVICE_MAC, KEY_DEVICE_SN, KEY_DEVICE_HVER, KEY_DEVICE_MODEL, KEY_DEVICE_COUNTRY, KEY_DEVICE_SECRETKEY};
@@ -652,17 +733,6 @@ static int do_date_cmd(int argc, char **argv)
     return ESP_OK;
 }
 
-static int do_rpsurl_cmd(int argc, char **argv)
-{
-    if (argc < 2) {
-        cfg_erase_key(KEY_IOT_RPS_URL);
-        printf("rps url has been erased\n");
-        return ESP_OK;
-    }
-    cfg_set_str(KEY_IOT_RPS_URL, argv[1]);
-    return ESP_OK;
-}
-
 static int do_reset_cmd(int argc, char **argv)
 {
     system_reset();
@@ -712,25 +782,25 @@ static int do_mode_cmd(int argc, char **argv)
         return ESP_OK;
     }
     
-    system_set_temporary_mode(tmp_mode);
+    system_set_temporary_mode_and_restart(tmp_mode);
     return ESP_OK;
 }
 
 static esp_console_cmd_t g_cmd[] = {
-    {"fset", "factory setting: fset [key] [value]", NULL, do_fset_cmd, NULL},
-    {"fget", "factory getting: fget [key]", NULL, do_fget_cmd, NULL},
-    {"reboot", "system restart", NULL, do_reboot_cmd, NULL},
-    {"sleep", "system sleep", NULL, do_sleep_cmd, NULL},
-    {"version", "system software version", NULL, do_version_cmd, NULL},
-    {"schedule", "set schedule time, default 03:00:00", NULL, do_schetime_cmd, NULL},
-    {"cat1", "cat1 status", NULL, do_cat1_cmd, NULL},
-    {"tz", "set time zone", NULL, do_tz_cmd, NULL},
-    {"date", "show system date", NULL, do_date_cmd, NULL},
-    {"rpsurl", "set rps url", NULL, do_rpsurl_cmd, NULL},
-    {"sys_reset", "system reset", NULL, do_reset_cmd, NULL},
-    {"debug", "debug on/off", NULL, do_debug_cmd, NULL},
-    {"snap", "snapshot", NULL, do_snap_cmd, NULL},
-    {"mode", "set mode", NULL, do_mode_cmd, NULL},
+    ESP_CONSOLE_CMD_INIT("uset", "userspace config: uset | uset <key> | uset <key> <value> | uset erase <key>", NULL, do_uset_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("fset", "factory setting: fset [key] [value]", NULL, do_fset_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("fget", "factory getting: fget [key]", NULL, do_fget_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("reboot", "system restart", NULL, do_reboot_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("sleep", "system sleep", NULL, do_sleep_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("version", "system software version", NULL, do_version_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("schedule", "set schedule time, default 03:00:00", NULL, do_schetime_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("cat1", "cat1 status", NULL, do_cat1_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("tz", "set time zone", NULL, do_tz_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("date", "show system date", NULL, do_date_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("sys_reset", "system reset", NULL, do_reset_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("debug", "debug on/off", NULL, do_debug_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("snap", "snapshot", NULL, do_snap_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("mode", "set mode", NULL, do_mode_cmd, NULL),
 };
 
 /*------------------------------------------------------------------------*/
@@ -786,16 +856,23 @@ esp_err_t cfg_get_device_info(deviceInfo_t *device)
     get_str(g_userHandle, KEY_DEVICE_NAME, device->name, sizeof(device->name), "NE101 Sensing Camera");
     get_str(g_factoryHandle, KEY_DEVICE_MAC, device->mac, sizeof(device->mac), NULL);
     get_str(g_factoryHandle, KEY_DEVICE_SN, device->sn, sizeof(device->sn), NVS_CFG_UNDEFINED);
-    get_str(g_factoryHandle, KEY_DEVICE_HVER, device->hardVersion, sizeof(device->hardVersion), "V1.0");
+    get_str(g_factoryHandle, KEY_DEVICE_HVER, device->hardVersion, sizeof(device->hardVersion), NVS_CFG_UNDEFINED);
     strncpy(device->softVersion, system_get_version(), sizeof(device->softVersion));
     get_str(g_factoryHandle, KEY_DEVICE_MODEL, device->model, sizeof(device->model), "NE101");
     get_str(g_factoryHandle, KEY_DEVICE_SECRETKEY, device->secretKey, sizeof(device->secretKey), NVS_CFG_UNDEFINED);
     if (get_str(g_userHandle, KEY_DEVICE_COUNTRY, device->countryCode, sizeof(device->countryCode), NULL) != ESP_OK ||
-        strlen(device->countryCode) != 2) {
-        get_str(g_factoryHandle, KEY_DEVICE_COUNTRY, device->countryCode, sizeof(device->countryCode), "US");
+        mmregdb_lookup_domain(device->countryCode) == NULL) {
+        if (get_str(g_factoryHandle, KEY_DEVICE_COUNTRY, device->countryCode, sizeof(device->countryCode), "US") != ESP_OK ||
+            mmregdb_lookup_domain(device->countryCode) == NULL) {
+            strncpy(device->countryCode, "US", sizeof(device->countryCode));
+        }
+    }
+    if (strcmp(device->countryCode, "AU") == 0) {
+        strncpy(device->countryCode, "AU-2020", sizeof(device->countryCode));
     }
     strncpy(device->camera, camera_get_backend_name(), sizeof(device->camera));
     get_str(g_userHandle, KEY_DEVICE_NETMOD, device->netmod, sizeof(device->netmod), "");
+    get_str(g_userHandle, KEY_WIFI_AP_IP, device->apIp, sizeof(device->apIp), "192.168.1.1");
     mutex_unlock();
     return ESP_OK;
 }
@@ -805,6 +882,7 @@ esp_err_t cfg_set_device_info(deviceInfo_t *device)
     set_str(g_userHandle, KEY_DEVICE_NAME, device->name);
     set_str(g_userHandle, KEY_DEVICE_COUNTRY, device->countryCode);
     set_str(g_userHandle, KEY_DEVICE_NETMOD, device->netmod);
+    set_str(g_userHandle, KEY_WIFI_AP_IP, device->apIp);
     commit_cfg(g_userHandle);
     set_str(g_factoryHandle, KEY_DEVICE_MAC, device->mac);
     set_str(g_factoryHandle, KEY_DEVICE_SN, device->sn);
@@ -826,8 +904,8 @@ esp_err_t cfg_get_image_attr(imgAttr_t *image)
     get_u8(g_userHandle, KEY_IMG_AGC, &image->bAgc, 1);
     get_u8(g_userHandle, KEY_IMG_GAIN, &image->gain, 0);
     get_u8(g_userHandle, KEY_IMG_GAINCEILING, &image->gainCeiling, 0);
-    get_u8(g_userHandle, KEY_IMG_HOR, &image->bHorizonetal, 1);
-    get_u8(g_userHandle, KEY_IMG_VER, &image->bVertical, 1);
+    get_u8(g_userHandle, KEY_IMG_HOR, &image->bHorizonetal, 0);
+    get_u8(g_userHandle, KEY_IMG_VER, &image->bVertical, 0);
     get_u8(g_userHandle, KEY_IMG_FRAMESIZE, &image->frameSize, 14); // default FRAMESIZE_FHD
     get_u8(g_userHandle, KEY_IMG_QUALITY, &image->quality, 12); // default quality 12 (0-63, higher value means lower quality)
     get_u8(g_userHandle, KEY_IMG_HDR, &image->hdrEnable, 0); // default HDR disabled
@@ -979,56 +1057,47 @@ esp_err_t cfg_set_upload_attr(uploadAttr_t *upload)
 
 esp_err_t cfg_get_mqtt_attr(mqttAttr_t *mqtt)
 {
-    platformParamAttr_t platformParam;
-    cfg_get_platform_param_attr(&platformParam);
-
     mutex_lock();
-
     memset(mqtt, 0, sizeof(mqttAttr_t));
-    switch (platformParam.currentPlatformType) {
-        case PLATFORM_TYPE_SENSING:
-            snprintf(mqtt->host, sizeof(mqtt->host), "%s", platformParam.sensingPlatform.host);
-            snprintf(mqtt->topic, sizeof(mqtt->topic), "%s", platformParam.sensingPlatform.topic);
-            snprintf(mqtt->user, sizeof(mqtt->user), "%s", platformParam.sensingPlatform.username);
-            snprintf(mqtt->password, sizeof(mqtt->password), "%s", platformParam.sensingPlatform.password);
-            snprintf(mqtt->clientId, sizeof(mqtt->clientId), "%s", platformParam.sensingPlatform.clientId);
-            mqtt->port = platformParam.sensingPlatform.mqttPort;
-            mqtt->qos = platformParam.sensingPlatform.qos;
-            mqtt->httpPort = platformParam.sensingPlatform.httpPort;
-            break;
-        case PLATFORM_TYPE_MQTT:
-            snprintf(mqtt->host, sizeof(mqtt->host), "%s", platformParam.mqttPlatform.host);
-            snprintf(mqtt->topic, sizeof(mqtt->topic), "%s", platformParam.mqttPlatform.topic);
-            snprintf(mqtt->user, sizeof(mqtt->user), "%s", platformParam.mqttPlatform.username);
-            snprintf(mqtt->password, sizeof(mqtt->password), "%s", platformParam.mqttPlatform.password);
-            snprintf(mqtt->clientId, sizeof(mqtt->clientId), "%s", platformParam.mqttPlatform.clientId);
-            snprintf(mqtt->caName, sizeof(mqtt->caName), "%s", platformParam.mqttPlatform.caName);
-            snprintf(mqtt->certName, sizeof(mqtt->certName), "%s", platformParam.mqttPlatform.certName);
-            snprintf(mqtt->keyName, sizeof(mqtt->keyName), "%s", platformParam.mqttPlatform.keyName);
-            mqtt->port = platformParam.mqttPlatform.mqttPort;
-            mqtt->qos = platformParam.mqttPlatform.qos;
-            mqtt->httpPort = 5220;
-            mqtt->tlsEnable = platformParam.mqttPlatform.tlsEnable;
-            break;
-        default:
-            break;
-    }
+    get_str(g_userHandle, KEY_MQTT_HOST, mqtt->host, sizeof(mqtt->host), "");
+    get_u32(g_userHandle, KEY_MQTT_PORT, &mqtt->port, 1883);
+    get_str(g_userHandle, KEY_MQTT_TOPIC, mqtt->topic, sizeof(mqtt->topic), "");
+    get_str(g_userHandle, KEY_MQTT_CLIENT_ID, mqtt->clientId, sizeof(mqtt->clientId), "");
+    get_u8(g_userHandle, KEY_MQTT_QOS, &mqtt->qos, 1);
+    get_str(g_userHandle, KEY_MQTT_USER, mqtt->user, sizeof(mqtt->user), "");
+    get_str(g_userHandle, KEY_MQTT_PASSWORD, mqtt->password, sizeof(mqtt->password), "");
+    get_u8(g_userHandle, KEY_MQTT_TLS_ENABLE, &mqtt->tlsEnable, 0);
+    get_str(g_userHandle, KEY_MQTT_CA_NAME, mqtt->caName, sizeof(mqtt->caName), "");
+    get_str(g_userHandle, KEY_MQTT_CERT_NAME, mqtt->certName, sizeof(mqtt->certName), "");
+    get_str(g_userHandle, KEY_MQTT_KEY_NAME, mqtt->keyName, sizeof(mqtt->keyName), "");
+    get_u32(g_userHandle, KEY_SNS_HTTP_PORT, &mqtt->httpPort, 5220);
+    strip_mqtt_scheme(mqtt->host);
     mutex_unlock();
     return ESP_OK;
 }
 
 esp_err_t cfg_set_mqtt_attr(mqttAttr_t *mqtt)
 {
+    strip_mqtt_scheme(mqtt->host);
+
+    if (strlen(mqtt->clientId) == 0) {
+        char id[24] = {0};
+        generate_random_string(id, sizeof(id) - 1);
+        snprintf(mqtt->clientId, sizeof(mqtt->clientId), "%s", id);
+    }
+
     mutex_lock();
     set_u32(g_userHandle, KEY_MQTT_PORT, mqtt->port);
     set_str(g_userHandle, KEY_MQTT_HOST, mqtt->host);
     set_str(g_userHandle, KEY_MQTT_TOPIC, mqtt->topic);
     set_str(g_userHandle, KEY_MQTT_USER, mqtt->user);
     set_str(g_userHandle, KEY_MQTT_PASSWORD, mqtt->password);
+    set_str(g_userHandle, KEY_MQTT_CLIENT_ID, mqtt->clientId);
     set_u8(g_userHandle, KEY_MQTT_TLS_ENABLE, mqtt->tlsEnable);
     set_str(g_userHandle, KEY_MQTT_CA_NAME, mqtt->caName);
     set_str(g_userHandle, KEY_MQTT_CERT_NAME, mqtt->certName);
     set_str(g_userHandle, KEY_MQTT_KEY_NAME, mqtt->keyName);
+    set_u8(g_userHandle, KEY_MQTT_QOS, mqtt->qos);
     commit_cfg(g_userHandle);
     mutex_unlock();
     return ESP_OK;
@@ -1049,117 +1118,6 @@ esp_err_t cfg_set_wifi_attr(wifiAttr_t *wifi)
     mutex_lock();
     set_str(g_userHandle, KEY_WIFI_SSID, wifi->ssid);
     set_str(g_userHandle, KEY_WIFI_PASSWORD, wifi->password);
-    commit_cfg(g_userHandle);
-    mutex_unlock();
-    return ESP_OK;
-}
-
-esp_err_t cfg_get_iot_attr(IoTAttr_t *iot)
-{
-    deviceInfo_t device;
-    cfg_get_device_info(&device);
-
-    mutex_lock();
-    memset(iot, 0, sizeof(IoTAttr_t));
-    if (cfg_is_undefined(device.secretKey)) {
-        get_u8(g_userHandle, KEY_IOT_AUTOP, &iot->autop_enable, 0);
-        get_u8(g_userHandle, KEY_IOT_DM, &iot->dm_enable, 0);
-    } else {
-        get_u8(g_userHandle, KEY_IOT_AUTOP, &iot->autop_enable, 1);
-        get_u8(g_userHandle, KEY_IOT_DM, &iot->dm_enable, 1);
-    }
-    get_u8(g_userHandle, KEY_IOT_AUTOP_DONE, &iot->autop_done, 0);
-    get_u8(g_userHandle, KEY_IOT_DM_DONE, &iot->dm_done, 0);
-    mutex_unlock();
-    return ESP_OK;
-}
-
-esp_err_t cfg_set_iot_attr(IoTAttr_t *iot)
-{
-    mutex_lock();
-    set_u8(g_userHandle, KEY_IOT_AUTOP, iot->autop_enable);
-    set_u8(g_userHandle, KEY_IOT_DM, iot->dm_enable);
-    set_u8(g_userHandle, KEY_IOT_AUTOP_DONE, iot->autop_done);
-    set_u8(g_userHandle, KEY_IOT_DM_DONE, iot->dm_done);
-    commit_cfg(g_userHandle);
-    mutex_unlock();
-    return ESP_OK;
-}
-
-esp_err_t cfg_get_platform_param_attr(platformParamAttr_t *platform)
-{
-    deviceInfo_t device;
-    cfg_get_device_info(&device);
-
-    mutex_lock();
-
-    memset(platform, 0, sizeof(platformParamAttr_t));
-    get_u8(g_userHandle, KEY_PLATFORM_TYPE, &platform->currentPlatformType, 0);
-
-    platform->sensingPlatform.platformType = 0;
-    snprintf(platform->sensingPlatform.platformName, sizeof(platform->sensingPlatform.platformName), "%s",
-             "Sensing Platform");
-    get_str(g_userHandle, KEY_MQTT_HOST, platform->sensingPlatform.host, sizeof(platform->sensingPlatform.host), "");
-    get_u32(g_userHandle, KEY_MQTT_PORT, &platform->sensingPlatform.mqttPort, 1883);
-    get_u32(g_userHandle, KEY_SNS_HTTP_PORT, &platform->sensingPlatform.httpPort, 5220);
-    snprintf(platform->sensingPlatform.topic, sizeof(platform->sensingPlatform.topic), "%s", "v1/devices/me/telemetry");
-    snprintf(platform->sensingPlatform.username, sizeof(platform->sensingPlatform.username), "%s", device.sn);
-    platform->sensingPlatform.qos = 1;
-
-    platform->mqttPlatform.platformType = 1;
-    snprintf(platform->mqttPlatform.platformName, sizeof(platform->mqttPlatform.platformName), "%s", "Other MQTT Platform");
-    get_str(g_userHandle, KEY_MQTT_HOST, platform->mqttPlatform.host, sizeof(platform->mqttPlatform.host), "");
-    get_u32(g_userHandle, KEY_MQTT_PORT, &platform->mqttPlatform.mqttPort, 1883);
-    get_str(g_userHandle, KEY_MQTT_TOPIC, platform->mqttPlatform.topic, sizeof(platform->mqttPlatform.topic),
-            "NE101SensingCam/Snapshot");
-    get_str(g_userHandle, KEY_MQTT_CLIENT_ID, platform->mqttPlatform.clientId, sizeof(platform->mqttPlatform.clientId), "");
-    get_u8(g_userHandle, KEY_MQTT_QOS, &platform->mqttPlatform.qos, 1);
-    get_str(g_userHandle, KEY_MQTT_USER, platform->mqttPlatform.username, sizeof(platform->mqttPlatform.username), "");
-    get_str(g_userHandle, KEY_MQTT_PASSWORD, platform->mqttPlatform.password, sizeof(platform->mqttPlatform.password), "");
-    get_u8(g_userHandle, KEY_MQTT_TLS_ENABLE, &platform->mqttPlatform.tlsEnable, 0);
-    get_str(g_userHandle, KEY_MQTT_CA_NAME, platform->mqttPlatform.caName, sizeof(platform->mqttPlatform.caName), "");
-    get_str(g_userHandle, KEY_MQTT_CERT_NAME, platform->mqttPlatform.certName, sizeof(platform->mqttPlatform.certName), "");
-    get_str(g_userHandle, KEY_MQTT_KEY_NAME, platform->mqttPlatform.keyName, sizeof(platform->mqttPlatform.keyName), "");
-
-    mutex_unlock();
-
-    return ESP_OK;
-}
-
-esp_err_t cfg_set_platform_param_attr(platformParamAttr_t *platform)
-{
-    mutex_lock();
-    set_u8(g_userHandle, KEY_PLATFORM_TYPE, platform->currentPlatformType);
-    switch (platform->currentPlatformType) {
-        case PLATFORM_TYPE_SENSING: {
-            set_str(g_userHandle, KEY_MQTT_HOST, platform->sensingPlatform.host);
-            set_u32(g_userHandle, KEY_MQTT_PORT, platform->sensingPlatform.mqttPort);
-            set_u32(g_userHandle, KEY_SNS_HTTP_PORT, platform->sensingPlatform.httpPort);
-            break;
-        }
-        case PLATFORM_TYPE_MQTT: {
-            set_str(g_userHandle, KEY_MQTT_HOST, platform->mqttPlatform.host);
-            set_u32(g_userHandle, KEY_MQTT_PORT, platform->mqttPlatform.mqttPort);
-            set_str(g_userHandle, KEY_MQTT_TOPIC, platform->mqttPlatform.topic);
-            // if client id is empty, randomly generate a 23-character string
-            if (strlen(platform->mqttPlatform.clientId) == 0) {
-                char id[24] = {0};
-                generate_random_string(id, sizeof(id) - 1);
-                snprintf(platform->mqttPlatform.clientId, sizeof(platform->mqttPlatform.clientId), "%s", id);
-            }
-            set_str(g_userHandle, KEY_MQTT_CLIENT_ID, platform->mqttPlatform.clientId);
-            set_u8(g_userHandle, KEY_MQTT_QOS, platform->mqttPlatform.qos);
-            set_str(g_userHandle, KEY_MQTT_USER, platform->mqttPlatform.username);
-            set_str(g_userHandle, KEY_MQTT_PASSWORD, platform->mqttPlatform.password);
-            set_u8(g_userHandle, KEY_MQTT_TLS_ENABLE, platform->mqttPlatform.tlsEnable);
-            set_str(g_userHandle, KEY_MQTT_CA_NAME, platform->mqttPlatform.caName);
-            set_str(g_userHandle, KEY_MQTT_CERT_NAME, platform->mqttPlatform.certName);
-            set_str(g_userHandle, KEY_MQTT_KEY_NAME, platform->mqttPlatform.keyName);
-            break;
-        }
-        default:
-            break;
-    }
     commit_cfg(g_userHandle);
     mutex_unlock();
     return ESP_OK;

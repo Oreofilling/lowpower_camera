@@ -24,7 +24,7 @@ typedef enum sleepBits {
     SLEEP_STORAGE_UPLOAD_STOP_BIT =  BIT(1),   // Storage upload complete
     SLEEP_NO_OPERATION_TIMEOUT_BIT = BIT(2),   // No operation timeout
     SLEEP_SCHEDULE_DONE_BIT = BIT(3),          // Scheduled tasks complete
-    SLEEP_MIP_DONE_BIT = BIT(4),               // MIP operations complete
+    SLEEP_DPP_DONE_BIT = BIT(4),               // DPP complete
     SLEEP_NO_DEBUG_BIT = BIT(5),               // No debug mode
 } sleepBits_e;
 
@@ -193,6 +193,12 @@ uint32_t sleep_is_alramin_goto_restart();
  * @return true if the time is reached, false otherwise
  */
 bool sleep_is_will_wakeup_time_reached(void);
+
+/**
+ * Check if the system is entering deep sleep
+ * @return true if the system is entering deep sleep, false otherwise
+ */
+bool sleep_is_entering_deep_sleep(void);
 
 #ifdef __cplusplus
 }

@@ -11,7 +11,6 @@
 #include "misc.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
-#include "iot_mip.h"
 #include "net_module.h"
 #include "ct_prov_ble.h"
 
@@ -19,8 +18,9 @@
 
 // WiFi connection timeout constants
 #define AP_TIMEOUT_SECONDS (60)  // AP mode inactivity timeout
-#define WIFI_STA_CONNECT_BIT BIT(0)  // Station connected event bit
+#define WIFI_STA_CONNECT_BIT BIT(0)  // Station got IP event bit
 #define WIFI_STA_DISCONNECT_BIT BIT(1)  // Station disconnected event bit
+#define WIFI_STA_LINK_UP_BIT BIT(2)  // HaLow link up (L2) event bit
 #define WIFI_STA_CONNECT_TIMEOUT_MS (20000)  // Max wait for connection
 #define WIFI_STA_DISCONNECT_TIMEOUT_MS (2000)  // Max wait for disconnection
 #define WIFI_STA_CHECK_TIMEOUT_MS (20000)  // Initial connection check timeout
@@ -54,17 +54,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     if (event_id == WIFI_EVENT_AP_STACONNECTED) {
         wifi->apUserCount++;
         ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED count: %d", wifi->apUserCount);
-        if (system_get_mode() == MODE_CONFIG){
-            lightAttr_t light;
-            cfg_get_light_attr(&light);
-            camera_flash_led_ctrl(&light);
-        }
     } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
         wifi->apUserCount--;
         ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED count: %d", wifi->apUserCount);
-        if(wifi->apUserCount == 0){
-            misc_flash_led_close();
-        }
     }
     /* Sta mode */
     if (event_id == WIFI_EVENT_STA_START) {
@@ -77,16 +69,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
     if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED");
-        xEventGroupClearBits(wifi->eventGroup, WIFI_STA_CONNECT_BIT);
+        xEventGroupClearBits(wifi->eventGroup, WIFI_STA_CONNECT_BIT | WIFI_STA_LINK_UP_BIT);
         xEventGroupSetBits(wifi->eventGroup, WIFI_STA_DISCONNECT_BIT);
         wifi->isConnected = false;
-        if (iot_mip_autop_is_enable()) {
-            iot_mip_autop_stop();
-        }
         push_stop();
     }
     if (event_id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED");
+        if (netModule_is_mmwifi()) {
+            xEventGroupClearBits(wifi->eventGroup, WIFI_STA_DISCONNECT_BIT);
+            xEventGroupSetBits(wifi->eventGroup, WIFI_STA_LINK_UP_BIT);
+        }
     }
     return;
 }
@@ -108,9 +101,6 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t eve
         wifi->isConnected = true;
         xEventGroupClearBits(wifi->eventGroup, WIFI_STA_DISCONNECT_BIT);
         xEventGroupSetBits(wifi->eventGroup, WIFI_STA_CONNECT_BIT);
-        if (iot_mip_autop_is_enable()) {
-            iot_mip_autop_async_start(NULL);
-        }
         if(system_get_mode() != MODE_SCHEDULE){
             system_ntp_time(false);
         }
@@ -465,7 +455,7 @@ void wifi_open(wifi_mode_t mode)
             ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
         snprintf(apSsid, sizeof(apSsid), "%s_%02X%02X%02X", device.model, mac_hex[3], mac_hex[4], mac_hex[5]);
-        wifi_cfg_softap(g_wifi.netif, apSsid, NULL, "192.168.1.1");
+        wifi_cfg_softap(g_wifi.netif, apSsid, NULL, device.apIp);
         wifi_timer_start();
         if(netModule_is_mmwifi())
             ESP_ERROR_CHECK(esp_wifi_start());
@@ -488,10 +478,7 @@ void wifi_open(wifi_mode_t mode)
     ESP_LOGI(TAG, "wifi init finished.");
     debug_cmd_add(g_cmd, sizeof(g_cmd) / sizeof(esp_console_cmd_t));
     if (!(mode & WIFI_MODE_AP)) {
-        if(netModule_is_mmwifi()){
-            xEventGroupWaitBits(g_wifi.eventGroup, WIFI_STA_DISCONNECT_BIT | WIFI_STA_CONNECT_BIT, \
-                                false, false, pdMS_TO_TICKS(WIFI_STA_CHECK_TIMEOUT_MS)); 
-        }else{
+        if(!netModule_is_mmwifi()){
             int retry_count = 0;
             EventBits_t event_bits;
             
@@ -539,14 +526,27 @@ esp_err_t wifi_sta_reconnect(const char *ssid, const char *password)
     xEventGroupWaitBits(g_wifi.eventGroup, WIFI_STA_DISCONNECT_BIT, true, true, \
                         pdMS_TO_TICKS(WIFI_STA_DISCONNECT_TIMEOUT_MS));
     wifi_cfg_sta(ssid, password);
-    if(!netModule_is_mmwifi())
+    if(!netModule_is_mmwifi()) {
         esp_wifi_connect();
-    else
-        mm_wifi_connect();
+        uxBits = xEventGroupWaitBits(g_wifi.eventGroup, WIFI_STA_CONNECT_BIT, true, true, \
+                                     pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS));
+        if (uxBits & WIFI_STA_CONNECT_BIT) {
+            return ESP_OK;
+        }
+        return ESP_FAIL;
+    }
 
-    uxBits = xEventGroupWaitBits(g_wifi.eventGroup, WIFI_STA_CONNECT_BIT, true, true, \
-                                 pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS));
-    if (uxBits & WIFI_STA_CONNECT_BIT) {
+    xEventGroupClearBits(g_wifi.eventGroup, WIFI_STA_LINK_UP_BIT);
+    if (mm_wifi_connect() != ESP_OK) {
+        ESP_LOGE(TAG, "HaLow reconnect failed");
+        return ESP_FAIL;
+    }
+
+    uxBits = xEventGroupWaitBits(g_wifi.eventGroup,
+                                 WIFI_STA_LINK_UP_BIT | WIFI_STA_DISCONNECT_BIT,
+                                 false, false,
+                                 pdMS_TO_TICKS(MM_WIFI_CONNECT_TIMEOUT_MS));
+    if (uxBits & WIFI_STA_LINK_UP_BIT) {
         return ESP_OK;
     }
     return ESP_FAIL;

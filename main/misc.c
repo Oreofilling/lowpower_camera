@@ -34,8 +34,24 @@
 #include "pir.h"
 #include "http.h"
 #include "wifi.h"
+#include "net_module.h"
+#include "system.h"
+#include "morse_dpp_cli.h"
+#include "push.h"
 
 #define TAG "-->MISC"
+
+/** blink_cnt value: toggle until timer stopped or a finite blink completes */
+#define MISC_LED_BLINK_FOREVER  (255U)
+
+#define DPP_PB_TASK_STACK   (6 * 1024)
+#define DPP_PB_TASK_PRIO    (5)
+
+#define DPP_SUCCESS_BLINK_MS        (3000)
+#define DPP_SUCCESS_BLINK_INTERVAL  (100)
+#define DPP_BREATH_MIN_DUTY         (0)
+#define DPP_BREATH_MAX_DUTY         (30)
+#define DPP_BREATH_STEP_MS          (20)
 
 #define LIGHT_DET_ADC1_CHN      (ADC_CHANNEL_0)
 #define BATTERY_DET_ADC2_CHN    (ADC_CHANNEL_3)
@@ -47,6 +63,19 @@ typedef enum {
     LED_MODE_FLASH         =  0,
     LED_MODE_LIGHT,
 } LED_MODE_E;
+
+typedef enum {
+    LED_EFFECT_NONE = 0,
+    LED_EFFECT_BLINK,
+    LED_EFFECT_BREATH,
+} led_effect_e;
+
+typedef struct {
+    LED_MODE_E mode;
+    bool hold_on;
+    bool light_state;
+    uint8_t light_duty;
+} misc_led_snapshot_t;
 
 static void misc_pwm_ctrl(uint8_t enable, uint8_t duty);
 
@@ -84,6 +113,9 @@ typedef struct miscLed {
     bool light_state;               ///< Current light state (on/off)
     bool hold_on;                   ///< Whether to hold light on
     bool light_update;              ///< Flag indicating light needs update
+    led_effect_e effect;            ///< Active indicator animation
+    bool breath_up;                 ///< Breathing fade direction (up/down)
+    uint16_t breath_elapsed_ms;     ///< Elapsed ms since last breath PWM step
 } miscLed_t;
 
 typedef struct miscBtn {
@@ -141,11 +173,94 @@ static void button_single_click_cb(void *arg, void *priv)
     }
 }
 
+static void misc_led_snapshot_save(misc_led_snapshot_t *snap)
+{
+    xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
+    snap->mode = g_misc.led.mode;
+    snap->hold_on = g_misc.led.hold_on;
+    snap->light_state = g_misc.led.light_state;
+    snap->light_duty = g_misc.led.light_duty;
+    xSemaphoreGive(g_misc.led.mutex);
+}
+
+static void misc_led_snapshot_restore(const misc_led_snapshot_t *snap)
+{
+    xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
+    if (g_misc.led.timer_state == 1) {
+        esp_timer_stop(g_misc.led.timer);
+        g_misc.led.timer_state = 0;
+    }
+    g_misc.led.effect = LED_EFFECT_NONE;
+    g_misc.led.breath_elapsed_ms = 0;
+    g_misc.led.blink_cnt = 0;
+    g_misc.led.mode = snap->mode;
+    g_misc.led.hold_on = snap->hold_on;
+    g_misc.led.light_state = snap->light_state;
+    g_misc.led.light_duty = snap->light_duty;
+    g_misc.led.light_update = 1;
+    xSemaphoreGive(g_misc.led.mutex);
+}
+
+static void misc_led_breath_start(void)
+{
+    xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
+    g_misc.led.hold_on = 0;
+    g_misc.led.light_state = 1;
+    g_misc.led.effect = LED_EFFECT_BREATH;
+    g_misc.led.breath_up = true;
+    g_misc.led.breath_elapsed_ms = 0;
+    g_misc.led.light_duty = DPP_BREATH_MIN_DUTY;
+    g_misc.led.blink_cnt = 0;
+    if (g_misc.led.timer_state == 1) {
+        esp_timer_stop(g_misc.led.timer);
+        g_misc.led.timer_state = 0;
+    }
+    g_misc.led.light_update = 1;
+    xSemaphoreGive(g_misc.led.mutex);
+}
+
+static void dpp_pb_task(void *arg)
+{
+    uint32_t timeout_ms = (uint32_t)(uintptr_t) arg;
+    misc_led_snapshot_t led_snap;
+
+    misc_led_snapshot_save(&led_snap);
+    misc_led_breath_start();
+
+    sleep_clear_event_bits(SLEEP_DPP_DONE_BIT);
+    push_stop();
+    esp_err_t rc = morse_dpp_pb_run(timeout_ms);
+
+    if (rc == ESP_OK) {
+        misc_led_blink(0, DPP_SUCCESS_BLINK_INTERVAL);
+        vTaskDelay(pdMS_TO_TICKS(DPP_SUCCESS_BLINK_MS));
+    }
+
+    misc_led_snapshot_restore(&led_snap);
+    sleep_set_event_bits(SLEEP_DPP_DONE_BIT);
+    vTaskDelete(NULL);
+}
+
 static void button_double_click_cb(void *arg, void *priv)
 {
     ESP_LOGI(TAG, "BUTTON_DOUBLE_CLICK");
-    storage_show_file();
-    system_show_meminfo();
+
+    if (!netModule_is_mmwifi()) {
+        storage_show_file();
+        system_show_meminfo();
+        return;
+    }
+
+    if (system_get_mode() == MODE_CONFIG) {
+        /* Network is already up in config mode; run DPP in a worker task. */
+        if (xTaskCreate(dpp_pb_task, "dpp_pb", DPP_PB_TASK_STACK,
+                        (void *)(uintptr_t) MORSE_DPP_PB_DEFAULT_TIMEOUT_MS,
+                        DPP_PB_TASK_PRIO, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "failed to create dpp_pb task");
+            misc_led_blink(5, 150);
+        }
+        return;
+    }
 }
 
 static void button_long_press_start_cb(void *arg, void *priv)
@@ -156,9 +271,12 @@ static void button_long_press_start_cb(void *arg, void *priv)
 
 static void button_long_press_hold_cb(void *arg, void *priv)
 {
-    ESP_LOGI(TAG, "BUTTON_LONG_PRESS_HOLD");
-    if(g_misc.reset_flag != 1 && ((esp_timer_get_time() - g_misc.btn.press_time) > BUTTON_RESET_TIME)){
-        /*LED is controlled by timer, button callback is also processed in timer, so it is necessary to exit the callback. So put the restart event on task.*/
+    if (g_misc.reset_flag == 1) {
+        return;
+    }
+    if ((esp_timer_get_time() - g_misc.btn.press_time) > BUTTON_RESET_TIME) {
+        ESP_LOGI(TAG, "BUTTON_LONG_PRESS_HOLD, factory reset armed");
+        /* LED is driven by timer; defer reset to misc_task on BUTTON_PRESS_UP. */
         misc_led_blink(5, 200);
         g_misc.reset_flag = 1;
         g_misc.btn.press_time = esp_timer_get_time();
@@ -468,31 +586,35 @@ int misc_get_battery_voltage()
     return g_misc.voltage;
 }
 
-static void misc_pwm_ctrl(uint8_t enable, uint8_t duty)
+static void misc_pwm_set_duty_pct(uint8_t duty_pct)
 {
     static int is_pause = 1;
-    static int _duty;
-    if(enable == 0 ){
-        duty = 0;
-        if(is_pause == 1)
-            return;
-    }else if(duty > 0 && duty < PWM_MIN_DUTY){
-        duty = PWM_MIN_DUTY;
-    }else if(duty >= 100){
-        duty = 99;
-    }
-    // ESP_LOGI(TAG,"misc_pwm_ctrl enable:%d duty:%d\r\n",enable , duty);
-    _duty = (1024 - 1) * (duty) / 100;
-    ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, _duty);
-    ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
-    if(is_pause && _duty > 0){
-        // ledc_timer_resume(ledc_channel.speed_mode, ledc_channel.timer_sel);
-        is_pause = 0;
-    }else if(!is_pause && _duty == 0){
-        // ledc_timer_pause(ledc_channel.speed_mode, ledc_channel.timer_sel);
-        is_pause = 1;
 
+    if (duty_pct >= 100) {
+        duty_pct = 99;
     }
+
+    uint32_t hw_duty = (1024U - 1U) * duty_pct / 100U;
+    ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, hw_duty);
+    ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+    if (is_pause && hw_duty > 0) {
+        is_pause = 0;
+    } else if (!is_pause && hw_duty == 0) {
+        is_pause = 1;
+    }
+}
+
+static void misc_pwm_ctrl(uint8_t enable, uint8_t duty)
+{
+    if (enable == 0) {
+        misc_pwm_set_duty_pct(0);
+        return;
+    }
+
+    if (duty > 0 && duty < PWM_MIN_DUTY) {
+        duty = PWM_MIN_DUTY;
+    }
+    misc_pwm_set_duty_pct(duty);
 }
 
 void misc_flash_led_open()
@@ -513,6 +635,9 @@ void misc_flash_led_close()
     g_misc.led.mode = LED_MODE_LIGHT;
     misc_pwm_ctrl(0, 0);
     g_misc.led.light_update = 1;
+    if (g_misc.led.hold_on) {
+        g_misc.led.light_state = 1;
+    }
     xSemaphoreGive(g_misc.led.mutex);
 }
 
@@ -520,6 +645,7 @@ void misc_flash_led_close()
 void misc_led_able(uint8_t is_able)
 {
     xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
+    g_misc.led.effect = LED_EFFECT_NONE;
     g_misc.led.hold_on = is_able;
     if (is_able) {
         g_misc.led.light_state = 1;
@@ -535,6 +661,7 @@ void misc_led_off(void)
     }
 
     xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
+    g_misc.led.effect = LED_EFFECT_NONE;
     g_misc.led.hold_on = 0;
     g_misc.led.blink_cnt = 0;
     g_misc.led.light_state = 0;
@@ -557,7 +684,13 @@ void misc_led_off(void)
 void misc_led_blink(uint8_t blink_cnt,  uint16_t blink_interval)
 {
     xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
+    /* Release CONFIG "hold on" so PWM can follow blink timer. */
+    g_misc.led.effect = LED_EFFECT_BLINK;
+    g_misc.led.hold_on = 0;
     g_misc.led.light_state = 1;
+    if (blink_cnt == 0) {
+        blink_cnt = MISC_LED_BLINK_FOREVER;
+    }
     g_misc.led.blink_cnt = blink_cnt;
 
     if(g_misc.led.timer_state == 1)
@@ -575,8 +708,10 @@ static void pwm_timer_cb(void *arg)
         g_misc.led.light_state = 1;
         g_misc.led.light_update = 1;
     }else if(g_misc.led.light_state == 1){
-        if(g_misc.led.blink_cnt > 0 )
+        if (g_misc.led.blink_cnt > 0 &&
+            g_misc.led.blink_cnt != MISC_LED_BLINK_FOREVER) {
             g_misc.led.blink_cnt--;
+        }
         g_misc.led.light_state = 0;
     }
     xSemaphoreGive(g_misc.led.mutex);
@@ -673,19 +808,55 @@ static esp_console_cmd_t g_cmd[] = {
 };
 
 
+static void misc_led_breath_step(void)
+{
+    if (g_misc.led.breath_up) {
+        if (g_misc.led.light_duty < DPP_BREATH_MAX_DUTY) {
+            g_misc.led.light_duty++;
+        } else {
+            g_misc.led.breath_up = false;
+        }
+    } else if (g_misc.led.light_duty > DPP_BREATH_MIN_DUTY) {
+        g_misc.led.light_duty--;
+    } else {
+        g_misc.led.breath_up = true;
+    }
+    g_misc.led.light_update = 1;
+}
+
 static void misc_task()
 {
     while (true) {
         xSemaphoreTake(g_misc.led.mutex, portMAX_DELAY);
-        if(g_misc.led.timer_state == 1 && g_misc.led.blink_cnt == 0){ //Turn off the timer
+        if (g_misc.led.effect == LED_EFFECT_BREATH) {
+            g_misc.led.breath_elapsed_ms += 20;
+            if (g_misc.led.breath_elapsed_ms >= DPP_BREATH_STEP_MS) {
+                g_misc.led.breath_elapsed_ms = 0;
+                misc_led_breath_step();
+            }
+        }
+
+        /* Finite blink finished (forever mode uses MISC_LED_BLINK_FOREVER, never 0). */
+        if (g_misc.led.timer_state == 1 && g_misc.led.blink_cnt == 0) {
             esp_timer_stop(g_misc.led.timer);
             g_misc.led.timer_state = 0;
+            g_misc.led.effect = LED_EFFECT_NONE;
+            /* CONFIG mode uses hold_on for a steady indicator; blink clears it. */
+            if (system_get_mode() == MODE_CONFIG) {
+                g_misc.led.hold_on = 1;
+                g_misc.led.light_state = 1;
+                g_misc.led.light_update = 1;
+            }
         }
 
         if(g_misc.led.mode == LED_MODE_LIGHT){
             if(g_misc.led.light_state == 1 || g_misc.led.hold_on){
                 if(g_misc.led.light_update){
-                    misc_pwm_ctrl(1, g_misc.led.light_duty);
+                    if (g_misc.led.effect == LED_EFFECT_BREATH) {
+                        misc_pwm_set_duty_pct(g_misc.led.light_duty);
+                    } else {
+                        misc_pwm_ctrl(1, g_misc.led.light_duty);
+                    }
                     g_misc.led.light_update = 0;
                 }
             }else{

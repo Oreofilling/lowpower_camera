@@ -16,39 +16,19 @@ function Wlan() {
         curConnectItem: {},
         wlanLoading: false,
         changeRegionLoading: false,
+        // Keep web-supported country codes (do not expose full regdb list).
+        regionOptionsAll: [
+            { value: "AU-2020", label: "AU-2020" },
+            { value: "AU-2024", label: "AU-2024" },
+            { value: "AU-revmf", label: "AU-revmf" },
+            { value: "EU", label: "EU" },
+            { value: "IN", label: "IN" },
+            { value: "KR", label: "KR" },
+            { value: "NZ", label: "NZ" },
+            { value: "SG", label: "SG" },
+            { value: "US", label: "US" },
+        ],
         regionOptions: [],
-        regionOptionsForCe: [
-            {
-                value: "EU",
-                label: "EU",
-            },
-            {
-                value: "IN",
-                label: "IN",
-            }
-        ],
-        regionOptionsForFcc: [
-            {
-                value: "AU",
-                label: "AU",
-            },
-            {
-                value: "KR",
-                label: "KR",
-            },
-            {
-                value: "NZ",
-                label: "NZ",
-            },
-            {
-                value: "SG",
-                label: "SG",
-            },
-            {
-                value: "US",
-                label: "US",
-            },
-        ],
         async getWlanInfo() {
             if(this.wlanLoading) return;
             this.wlanData = [];
@@ -179,6 +159,7 @@ function Wlan() {
         async changeRegion({ detail }) {
             if(this.changeRegionLoading) return;
             this.wlanRegion = detail.value;
+            this.countryCode = detail.value;
             this.changeRegionLoading = true;
             try {
                 const res = await postData(URL.setDevInfo, {

@@ -92,10 +92,10 @@ const URL = {
     getCapParam: baseUrl + "/capture/getCapParam",
 
     setCapParam: baseUrl + "/capture/setCapParam",
-    getMqttParam: baseUrl + "/network/getPlatformParam",
-
-    getDataReport: baseUrl + "/network/getPlatformParam",
-    setDataReport: baseUrl + "/network/setPlatformParam",
+    getMqttParam: baseUrl + "/network/getMqttParam",
+    setMqttParam: baseUrl + "/network/setMqttParam",
+    getDataReport: baseUrl + "/network/getMqttParam",
+    setDataReport: baseUrl + "/network/setMqttParam",
     getDevInfo: baseUrl + "/system/getDevInfo",
     setDevInfo: baseUrl + "/system/setDevInfo",
     getDevBattery: baseUrl + "/system/getDevBattery",
@@ -106,6 +106,7 @@ const URL = {
     getWifiParam: baseUrl + "/network/getWifiParam",
     setWifiParam: baseUrl + "/network/setWifiParam",
     setDevSleep: baseUrl + "/system/setDevSleep",
+    setDevReset: baseUrl + "/system/setDevReset",
     setDevTime: baseUrl + "/system/setDevTime",
     exportSessionLog: baseUrl + "/system/exportSessionLog",
     exportConfig: baseUrl + "/system/exportConfig",
@@ -117,7 +118,6 @@ const URL = {
     sendCellularCommand: baseUrl + "/network/sendCellularCommand",
     getCellularStatus: baseUrl + "/network/getCellularStatus",
     pingTest: baseUrl + "/network/pingTest",
-    getIoTParam: baseUrl + "/network/getIoTParam",
     setIotParam: baseUrl + "/network/setIoTParam",
 
     // scheduled upload

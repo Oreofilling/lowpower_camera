@@ -1,0 +1,10 @@
+menu "Regulatory Database"
+
+config WIFI_MORSE_AU_CHANNELISATION_RUNTIME
+	bool "Expose all AU channelisation variants at runtime"
+	default y
+	help
+		Australia channelisation is selected at runtime via domain codes
+		AU-2020, AU-2024, and AU-revmf instead of a compile-time choice.
+
+endmenu
