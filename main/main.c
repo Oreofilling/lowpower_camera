@@ -413,11 +413,13 @@ static void handle_config_mode(snapType_e snapType, QueueHandle_t xQueueMqtt)
     http_open();
     sleep_reset_wakeup_todo();
     netModule_open(main_mode);
+#if CONFIG_CT_PROV_BLE
     esp_err_t ble_err = ct_prov_app_start();
     if (ble_err != ESP_OK) {
         ESP_LOGW(TAG, "CT-Prov server unavailable: %s; softAP remains active",
                  esp_err_to_name(ble_err));
     }
+#endif
     camera_open(NULL, xQueueMqtt);
     if (snapType == SNAP_BUTTON) {
         camera_snapshot(snapType, 1);
@@ -426,7 +428,9 @@ static void handle_config_mode(snapType_e snapType, QueueHandle_t xQueueMqtt)
     sleep_set_event_bits(SLEEP_DPP_DONE_BIT);
     sleep_wait_event_bits(SLEEP_SNAPSHOT_STOP_BIT | SLEEP_STORAGE_UPLOAD_STOP_BIT | SLEEP_DPP_DONE_BIT |
                           SLEEP_NO_OPERATION_TIMEOUT_BIT | SLEEP_NO_DEBUG_BIT, true);
+#if CONFIG_CT_PROV_BLE
     ct_prov_app_stop();
+#endif
 }
 
 /**

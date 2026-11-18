@@ -1,0 +1,10 @@
+# AP-only bench profile: skip the CT-Prov BLE server in config mode.
+# NimBLE still compiles but never initializes, so its runtime RAM stays
+# available to the camera pipeline (CSI DMA). CT-Prov over softAP HTTP
+# (192.168.1.1) remains fully available.
+#
+# Build without touching the tracked sdkconfig:
+#   cp sdkconfig build-aponly.sdkconfig
+#   cat sdkconfig.aponly >> build-aponly.sdkconfig
+#   idf.py -B build-aponly -DSDKCONFIG=$PWD/build-aponly.sdkconfig build
+# CONFIG_CT_PROV_BLE is not set

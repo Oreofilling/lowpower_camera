@@ -3,3 +3,5 @@ build/
 *.old
 sdkconfig.old
 .cache/
+build-aponly/
+build-aponly.sdkconfig

@@ -1,0 +1,13 @@
+menu "CT application"
+
+    config CT_PROV_BLE
+        bool "Start the CT-Prov BLE server in config mode"
+        default y
+        help
+            When enabled, config mode starts the CT-Prov GATT server
+            (NimBLE advertising) alongside the softAP. Disable for an
+            AP-only bench build: the softAP web console (and the CT-Prov
+            softAP HTTP transport) stay available, the BLE stack never
+            initializes, and its RAM goes to the camera pipeline.
+
+endmenu
