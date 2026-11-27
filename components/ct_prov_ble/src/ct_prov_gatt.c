@@ -15,6 +15,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_err.h"
@@ -89,18 +90,23 @@ static uint16_t s_d2c_handle;
 static unsigned s_mtu = CT_PROV_DEFAULT_MTU;
 
 /* Reception. The assembler is touched from the NimBLE host task and from
- * the watchdog timer, so partial-state access takes a critical section. */
-static ct_prov_assembler_t s_asm;
+ * the watchdog timer, so partial-state access takes a critical section.
+ * The four session buffers (~16K total) are heap-allocated on CONNECT and
+ * freed on DISCONNECT/stop, so duty cycles that never provision keep the
+ * memory available to the RTOS heap. */
+static ct_prov_assembler_t *s_asm;
 static portMUX_TYPE s_asm_mux = portMUX_INITIALIZER_UNLOCKED;
 static int64_t s_partial_since_us;
 static uint8_t s_rx_frame[CT_PROV_FRAGMENT_HEADER_SIZE + CT_PROV_TX_PAYLOAD_MAX];
+static uint8_t *s_tx_buf;
+static char *s_resp_buf;
+static uint8_t *s_pend_buf;
 
 /* Transmission: one logical packet, sliced on demand, one indication in
  * flight at a time. Clients may pipeline requests (doc 5 allows several
  * in flight), so a second response can be ready before the previous
  * packet drained its final indication confirmation; it waits one deep
  * here instead of being dropped. */
-static uint8_t s_tx_buf[CT_PROV_MAX_LOGICAL_PACKET];
 static size_t s_tx_len;
 static size_t s_tx_off;
 static ct_prov_packet_kind_t s_tx_kind;
@@ -109,10 +115,9 @@ static uint8_t s_tx_seq; /* D2C message_id, resets per connection (doc 5) */
 static bool s_tx_active;
 static bool s_close_after_tx;
 static uint32_t s_evt_seq; /* protocol.error event seq (doc 6.4) */
-static char s_resp_buf[CT_PROV_MAX_LOGICAL_PACKET + 1];
+
 
 /* One-deep response queue, drained when the active packet completes. */
-static uint8_t s_pend_buf[CT_PROV_MAX_LOGICAL_PACKET];
 static size_t s_pend_len;
 static ct_prov_packet_kind_t s_pend_kind;
 static bool s_pending;
@@ -199,7 +204,7 @@ static void start_tx(const char *json, size_t len, ct_prov_packet_kind_t kind)
          * state and kill it mid-flight. A third arrival while one is
          * already parked is a client beyond one-deep pipelining; the
          * earliest response keeps its place. */
-        if (s_pending || len > sizeof(s_pend_buf)) {
+        if (s_pending || len > CT_PROV_MAX_LOGICAL_PACKET) {
             ESP_LOGE(TAG,
                      "D2C packet dropped: pending queue full (%zu bytes)",
                      len);
@@ -249,7 +254,7 @@ static void send_protocol_error(const char *message)
              "{\"code\":\"INVALID_MESSAGE\",\"message\":\"%.48s\"}", message);
     const size_t n = ct_prov_envelope_encode_event(
         (int64_t)s_evt_seq++, "protocol.error", data, s_resp_buf,
-        sizeof(s_resp_buf));
+        CT_PROV_MAX_LOGICAL_PACKET + 1);
     if (n > 0) {
         start_tx(s_resp_buf, n, CT_PROV_KIND_PROTOCOL_ERROR);
     }
@@ -277,7 +282,7 @@ static void handle_envelope(const uint8_t *payload, size_t len)
         /* Doc 11: always succeed, then disconnect once the reply drains. */
         const size_t n = ct_prov_envelope_encode_response(
             env.id, "session.close.result", true, NULL, NULL, NULL,
-            s_resp_buf, sizeof(s_resp_buf));
+            s_resp_buf, CT_PROV_MAX_LOGICAL_PACKET + 1);
         ct_prov_envelope_free(&env);
         if (n > 0) {
             s_close_after_tx = true;
@@ -287,7 +292,7 @@ static void handle_envelope(const uint8_t *payload, size_t len)
     }
 
     size_t n = s_req_cb != NULL ? s_req_cb(s_req_cb_arg, &env, s_resp_buf,
-                                           sizeof(s_resp_buf))
+                                           CT_PROV_MAX_LOGICAL_PACKET + 1)
                                 : 0;
     if (n == 0) {
         /* Guarantee an answer even when the handler stays silent. */
@@ -296,7 +301,7 @@ static void handle_envelope(const uint8_t *payload, size_t len)
         n = ct_prov_envelope_encode_response(
             env.id, op_result, false, NULL, "INTERNAL_ERROR",
             "request handler produced no response", s_resp_buf,
-            sizeof(s_resp_buf));
+            CT_PROV_MAX_LOGICAL_PACKET + 1);
     }
     ct_prov_envelope_free(&env);
     if (n > 0) {
@@ -346,10 +351,10 @@ static int c2d_access(uint16_t conn_handle, uint16_t attr_handle,
     ct_prov_reject_reason_t reason;
     ct_prov_feed_state_t st;
     taskENTER_CRITICAL(&s_asm_mux);
-    st = ct_prov_assembler_feed(&s_asm, s_rx_frame, copied, &reason);
+    st = ct_prov_assembler_feed(s_asm, s_rx_frame, copied, &reason);
     /* Refresh the hang clock on every fragment so a stalled sender (not a
      * slow one) is who trips the watchdog (doc 13). */
-    if (ct_prov_assembler_has_partial(&s_asm)) {
+    if (ct_prov_assembler_has_partial(s_asm)) {
         s_partial_since_us = esp_timer_get_time();
     }
     taskEXIT_CRITICAL(&s_asm_mux);
@@ -364,7 +369,7 @@ static int c2d_access(uint16_t conn_handle, uint16_t attr_handle,
     }
 
     size_t payload_len = 0;
-    const uint8_t *payload = ct_prov_assembler_payload(&s_asm, &payload_len);
+    const uint8_t *payload = ct_prov_assembler_payload(s_asm, &payload_len);
     handle_envelope(payload, payload_len);
     return 0;
 }
@@ -457,13 +462,40 @@ static void maybe_start_security(void)
     }
 }
 
+static void session_buffers_free(void);
+
+static bool session_buffers_alloc(void)
+{
+    /* The four blocks are large enough to land in PSRAM-preferred malloc. */
+    if (s_asm == NULL) {
+        s_asm = malloc(sizeof(*s_asm));
+    }
+    if (s_tx_buf == NULL) {
+        s_tx_buf = malloc(CT_PROV_MAX_LOGICAL_PACKET);
+    }
+    if (s_resp_buf == NULL) {
+        s_resp_buf = malloc(CT_PROV_MAX_LOGICAL_PACKET + 1);
+    }
+    if (s_pend_buf == NULL) {
+        s_pend_buf = malloc(CT_PROV_MAX_LOGICAL_PACKET);
+    }
+    if (s_asm == NULL || s_tx_buf == NULL || s_resp_buf == NULL ||
+        s_pend_buf == NULL) {
+        session_buffers_free();
+        return false;
+    }
+    return true;
+}
+
 /* Reset everything that is scoped to one connection (doc 5: message_id
  * and event seq restart from 0 on each connection). */
 static void session_reset(void)
 {
     s_mtu = CT_PROV_DEFAULT_MTU;
     taskENTER_CRITICAL(&s_asm_mux);
-    ct_prov_assembler_init(&s_asm, s_mtu);
+    if (s_asm != NULL) {
+        ct_prov_assembler_init(s_asm, s_mtu);
+    }
     s_partial_since_us = 0;
     taskEXIT_CRITICAL(&s_asm_mux);
     s_d2c_indicate = false;
@@ -476,6 +508,20 @@ static void session_reset(void)
     s_tx_off = 0;
     s_tx_seq = 0;
     s_evt_seq = 0;
+}
+
+static void session_buffers_free(void)
+{
+    taskENTER_CRITICAL(&s_asm_mux);
+    free(s_asm);
+    s_asm = NULL;
+    taskEXIT_CRITICAL(&s_asm_mux);
+    free(s_tx_buf);
+    s_tx_buf = NULL;
+    free(s_resp_buf);
+    s_resp_buf = NULL;
+    free(s_pend_buf);
+    s_pend_buf = NULL;
 }
 
 static int gap_event(struct ble_gap_event *event, void *arg)
@@ -496,6 +542,14 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             return 0;
         }
         s_conn_handle = event->connect.conn_handle;
+        if (!session_buffers_alloc()) {
+            ESP_LOGE(TAG, "session buffers OOM; refusing connection");
+            ble_gap_terminate(event->connect.conn_handle,
+                              CT_PROV_HCI_REMOTE_USER_TERM);
+            s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            advertise();
+            return 0;
+        }
         session_reset();
         ESP_LOGI(TAG, "client connected, handle=%u", s_conn_handle);
         maybe_start_security();
@@ -506,6 +560,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                  event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         session_reset();
+        session_buffers_free();
         advertise();
         return 0;
 
@@ -525,16 +580,16 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_mtu = event->mtu.value > 0 ? event->mtu.value : CT_PROV_DEFAULT_MTU;
         ESP_LOGI(TAG, "ATT MTU updated to %u", s_mtu);
         taskENTER_CRITICAL(&s_asm_mux);
-        if (ct_prov_assembler_has_partial(&s_asm)) {
+        if (ct_prov_assembler_has_partial(s_asm)) {
             /* Larger MTU changes the non-final frame length, so a partial
              * packet can no longer be completed correctly. */
-            ct_prov_assembler_init(&s_asm, s_mtu);
+            ct_prov_assembler_init(s_asm, s_mtu);
             s_partial_since_us = 0;
             taskEXIT_CRITICAL(&s_asm_mux);
             ESP_LOGW(TAG, "MTU changed mid-assembly; partial packet dropped");
             send_protocol_error("out_of_order");
         } else {
-            ct_prov_assembler_init(&s_asm, s_mtu);
+            ct_prov_assembler_init(s_asm, s_mtu);
             taskEXIT_CRITICAL(&s_asm_mux);
         }
         return 0;
@@ -659,11 +714,11 @@ static void watchdog_cb(void *arg)
     (void)arg;
     bool timed_out = false;
     taskENTER_CRITICAL(&s_asm_mux);
-    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
-        ct_prov_assembler_has_partial(&s_asm) && s_partial_since_us != 0 &&
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE && s_asm != NULL &&
+        ct_prov_assembler_has_partial(s_asm) && s_partial_since_us != 0 &&
         esp_timer_get_time() - s_partial_since_us >
             CT_PROV_REASSEMBLY_TIMEOUT_US) {
-        ct_prov_assembler_init(&s_asm, s_mtu);
+        ct_prov_assembler_init(s_asm, s_mtu);
         s_partial_since_us = 0;
         timed_out = true;
     }
@@ -811,6 +866,7 @@ void ct_prov_ble_stop(void)
     nimble_port_deinit();
     s_started = false;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    session_buffers_free();
     ESP_LOGI(TAG, "CT-Prov server stopped");
 }
 

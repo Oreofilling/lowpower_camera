@@ -1,4 +1,10 @@
-idf_component_register(SRCS "onboarding.c" "push.c" "webhook.c" "uvc.c" "pir.c" "wifi_iperf.c" "ping.c" "cat1.c" "net_module.c" "morse.c" "morse_dpp_cli.c" "system.c" "misc.c" "sleep.c" "utils.c" "debug.c" "camera.c" "storage.c" "session_log.c" "config.c" "ota.c" "mqtt.c" "http.c" "http_client.c" "wifi.c" "main.c" "camera_uvc_controls.c" "ble_prov_demo.c" "ct_prov_app.c"
+if(CONFIG_CT_NET_HALOW)
+    set(MORSE_SRCS "morse.c" "morse_dpp_cli.c")
+else()
+    set(MORSE_SRCS "")
+endif()
+
+idf_component_register(SRCS "onboarding.c" "push.c" "webhook.c" "uvc.c" "pir.c" "wifi_iperf.c" "ping.c" "cat1.c" "net_module.c" ${MORSE_SRCS} "system.c" "misc.c" "sleep.c" "utils.c" "debug.c" "camera.c" "storage.c" "session_log.c" "config.c" "ota.c" "mqtt.c" "http.c" "http_client.c" "wifi.c" "main.c" "camera_uvc_controls.c" "ble_prov_demo.c" "ct_prov_app.c"
                     INCLUDE_DIRS "."
                     EMBED_FILES "web/favicon.ico" "web/dist/index.html" "web/dist/assets/index.js" "web/dist/assets/index.css")
 

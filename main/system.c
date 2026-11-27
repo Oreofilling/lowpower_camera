@@ -1,10 +1,13 @@
 #include <sys/time.h>
 #include <time.h>
+#include <stdlib.h>
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_netif_sntp.h"
+#include "esp_heap_task_info.h"
 #include "config.h"
 #include "system.h"
 #include "storage.h"
@@ -219,6 +222,135 @@ void system_show_meminfo()
     ESP_LOGI(TAG, "show meminfo:");
     heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);  // Internal RAM
     heap_caps_print_heap_info(MALLOC_CAP_SPIRAM);    // SPI RAM
+}
+
+/**
+ * Print RTOS task information
+ * Shows heap summary and per-task stack high water mark, priority, run time and CPU ratio
+ */
+void system_show_taskinfo()
+{
+    /* Same heap as xPortGetFreeHeapSize(): internal RAM only, no SPI RAM */
+    const uint32_t heap_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    uint32_t total_run_time = 0;
+    UBaseType_t task_num = uxTaskGetNumberOfTasks();
+    TaskStatus_t *status = malloc(task_num * sizeof(TaskStatus_t));
+
+    if (status == NULL) {
+        ESP_LOGE(TAG, "task info: no memory for %u tasks", (unsigned)task_num);
+        return;
+    }
+    /* Returns 0 when a task was created between the count and the snapshot */
+    task_num = uxTaskGetSystemState(status, task_num, &total_run_time);
+    if (task_num == 0) {
+        ESP_LOGE(TAG, "task info: task list changed, retry");
+        free(status);
+        return;
+    }
+
+    /* Sort by task number so tasks are listed in creation order */
+    for (UBaseType_t i = 1; i < task_num; i++) {
+        TaskStatus_t cur = status[i];
+        UBaseType_t j = i;
+        for (; j > 0 && status[j - 1].xTaskNumber > cur.xTaskNumber; j--) {
+            status[j] = status[j - 1];
+        }
+        status[j] = cur;
+    }
+
+    printf("   ###############################System Status###############################\n");
+    printf("   [TotalRam:%u Byte  RemainRam:%u Byte  MinRam:%u Byte  TaskNum:%u  RunTime:%ums]\n",
+           (unsigned)heap_caps_get_total_size(heap_caps), (unsigned)heap_caps_get_free_size(heap_caps),
+           (unsigned)heap_caps_get_minimum_free_size(heap_caps), (unsigned)task_num,
+           (unsigned)(total_run_time / 1000));
+    printf("   %-16s  %-15s  %-8s  %-11s  %s\n",
+           "TaskName", "MinStack(Byte)", "Priority", "RunTime(ms)", "Ratio(%)");
+    for (UBaseType_t i = 0; i < task_num; i++) {
+        printf("   %-16s  %-15u  %-8u  %-11u  %.2f %%\n", status[i].pcTaskName,
+               (unsigned)status[i].usStackHighWaterMark, (unsigned)status[i].uxCurrentPriority,
+               (unsigned)(status[i].ulRunTimeCounter / 1000),
+               total_run_time ? (double)status[i].ulRunTimeCounter * 100.0 / total_run_time : 0.0);
+    }
+#if !CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    printf("   RunTime/Ratio unavailable: CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is off\n");
+#else
+    /* The run time counter is a 32-bit us tick, it wraps about 71.6 minutes after boot */
+    if (esp_timer_get_time() >> 32) {
+        printf("   RunTime/Ratio counters have overflowed (uptime > 71.6 min), reboot for accurate values\n");
+    }
+#endif
+    printf("   ###########################################################################\n");
+
+    free(status);
+}
+
+/**
+ * Print heap usage summary, optionally attributed per owning task
+ * @param by_task Also print per-task allocation totals (needs CONFIG_HEAP_TASK_TRACKING)
+ */
+void system_show_heapinfo(bool by_task)
+{
+    const uint32_t heap_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+
+    printf("   [Internal] total:%u  free:%u  min:%u  largest:%u\n",
+           (unsigned)heap_caps_get_total_size(heap_caps), (unsigned)heap_caps_get_free_size(heap_caps),
+           (unsigned)heap_caps_get_minimum_free_size(heap_caps), (unsigned)heap_caps_get_largest_free_block(heap_caps));
+    printf("   [SPIRAM]   total:%u  free:%u  min:%u  largest:%u\n",
+           (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+           (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+
+#if !CONFIG_HEAP_TASK_TRACKING
+    if (by_task) {
+        printf("   per-task heap stats unavailable: CONFIG_HEAP_TASK_TRACKING is off\n");
+    }
+#else
+    if (!by_task) {
+        return;
+    }
+
+    /* +8 slack: totals also track tasks that allocated before the scheduler */
+    size_t capacity = uxTaskGetNumberOfTasks() + 8;
+    heap_task_totals_t *totals = malloc(capacity * sizeof(*totals));
+    if (totals == NULL) {
+        ESP_LOGE(TAG, "heap info: no memory for %u totals", (unsigned)capacity);
+        return;
+    }
+    memset(totals, 0, capacity * sizeof(*totals));
+
+    size_t num_totals = 0;
+    heap_task_info_params_t params = {
+        /* first-match partitioning: [0] internal, [1] SPIRAM */
+        .caps = { MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM, 0, 0 },
+        .mask = { MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM, 0, 0 },
+        .totals = totals,
+        .num_totals = &num_totals,
+        .max_totals = capacity,
+    };
+    heap_caps_get_per_task_info(&params);
+
+    /* Sort by internal usage descending so the biggest consumer comes first */
+    for (size_t i = 1; i < num_totals; i++) {
+        heap_task_totals_t cur = totals[i];
+        size_t j = i;
+        for (; j > 0 && totals[j - 1].size[0] < cur.size[0]; j--) {
+            totals[j] = totals[j - 1];
+        }
+        totals[j] = cur;
+    }
+
+    printf("   %-16s  %12s  %7s  %12s  %7s\n",
+           "TaskName", "Internal(B)", "Blocks", "SPIRAM(B)", "Blocks");
+    for (size_t i = 0; i < num_totals; i++) {
+        if (totals[i].size[0] == 0 && totals[i].size[1] == 0) {
+            continue; /* task owns nothing */
+        }
+        printf("   %-16s  %12u  %7u  %12u  %7u\n",
+               totals[i].task ? pcTaskGetName(totals[i].task) : "Pre-Scheduler",
+               (unsigned)totals[i].size[0], (unsigned)totals[i].count[0],
+               (unsigned)totals[i].size[1], (unsigned)totals[i].count[1]);
+    }
+    free(totals);
+#endif
 }
 
 /**

@@ -41,6 +41,13 @@
 static const char *TAG = "cam_hal";
 static cam_obj_t *cam_obj = NULL;
 
+/* Statically reserved DMA bounce buffer for the non-PSRAM-direct path.
+ * ll_cam_dma_sizes() uses a fixed 16 * 1024 byte layout for JPEG, so a
+ * compile-time reservation keeps camera init immune to heap fragmentation
+ * (config mode runs BLE + httpd + softAP concurrently). Larger requests
+ * fall back to the heap. */
+static uint8_t s_cam_dma_buffer[16 * 1024] __attribute__((aligned(4)));
+
 static const uint32_t JPEG_SOI_MARKER = 0xFFD8FF;  // written in little-endian for esp32
 static const uint16_t JPEG_EOI_MARKER = 0xD9FF;  // written in little-endian for esp32
 
@@ -310,11 +317,15 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
     }
 
     if (!cam_obj->psram_mode) {
-        cam_obj->dma_buffer = (uint8_t *)heap_caps_malloc(cam_obj->dma_buffer_size * sizeof(uint8_t), MALLOC_CAP_DMA);
-        if(NULL == cam_obj->dma_buffer) {
-            ESP_LOGE(TAG,"%s(%d): DMA buffer %d Byte malloc failed, the current largest free block:%d Byte", __FUNCTION__, __LINE__,
-                     (int) cam_obj->dma_buffer_size, (int) heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-            return ESP_FAIL;
+        if (cam_obj->dma_buffer_size <= sizeof(s_cam_dma_buffer)) {
+            cam_obj->dma_buffer = s_cam_dma_buffer; /* not heap-allocated; cam_deinit skips it */
+        } else {
+            cam_obj->dma_buffer = (uint8_t *)heap_caps_malloc(cam_obj->dma_buffer_size * sizeof(uint8_t), MALLOC_CAP_DMA);
+            if(NULL == cam_obj->dma_buffer) {
+                ESP_LOGE(TAG,"%s(%d): DMA buffer %d Byte malloc failed, the current largest free block:%d Byte", __FUNCTION__, __LINE__,
+                         (int) cam_obj->dma_buffer_size, (int) heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+                return ESP_FAIL;
+            }
         }
 
         cam_obj->dma = allocate_dma_descriptors(cam_obj->dma_node_cnt, cam_obj->dma_node_buffer_size, cam_obj->dma_buffer);
@@ -439,7 +450,7 @@ esp_err_t cam_deinit(void)
     if (cam_obj->dma) {
         free(cam_obj->dma);
     }
-    if (cam_obj->dma_buffer) {
+    if (cam_obj->dma_buffer && cam_obj->dma_buffer != s_cam_dma_buffer) {
         free(cam_obj->dma_buffer);
     }
     if (cam_obj->frames) {

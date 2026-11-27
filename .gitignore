@@ -5,3 +5,7 @@ sdkconfig.old
 .cache/
 build-aponly/
 build-aponly.sdkconfig
+build-exp/
+build-exp.sdkconfig
+build-halowoff/
+build-halowoff.sdkconfig

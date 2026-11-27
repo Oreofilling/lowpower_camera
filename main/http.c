@@ -17,7 +17,9 @@
 #include "sleep.h"
 #include "ota.h"
 #include "misc.h"
+#if CONFIG_CT_NET_HALOW
 #include "morse.h"
+#endif
 #include "s2j.h"
 #include "cat1.h"
 #include "ping.h"
@@ -627,32 +629,42 @@ esp_err_t get_wifi_param_handle(httpd_req_t *req)
  * response envelope out (same op set and semantics as the BLE transport,
  * no fragmentation). Oversized or undecodable bodies answer 400.
  */
-static char g_ctprov_resp[4096 + 1];
 
 static esp_err_t post_ctprov_handle(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "%s", req->uri);
     clear_timeout();
 
-    if (req->content_len == 0 || req->content_len > sizeof(g_ctprov_resp)) {
+    /* Per-request heap: the 4K response buffer returns to the RTOS heap
+     * between provisioning requests instead of living in .bss. */
+    char *ctprov_resp = malloc(4096 + 1);
+    if (ctprov_resp == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, NULL);
+        return ESP_OK;
+    }
+    if (req->content_len == 0 || req->content_len > 4096 + 1) {
+        free(ctprov_resp);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
         return ESP_OK;
     }
     char *content = http_get_content_from_req(req);
     if (content == NULL) {
+        free(ctprov_resp);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
         return ESP_OK;
     }
     const size_t n = ct_prov_app_handle_http(content, req->content_len,
-                                              g_ctprov_resp,
-                                              sizeof(g_ctprov_resp));
+                                              ctprov_resp,
+                                              4096 + 1);
     http_free_content(content);
     if (n == 0) {
+        free(ctprov_resp);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
         return ESP_OK;
     }
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    httpd_resp_send(req, g_ctprov_resp, n);
+    httpd_resp_send(req, ctprov_resp, n);
+    free(ctprov_resp);
     return ESP_OK;
 }
 
@@ -771,7 +783,9 @@ esp_err_t set_dev_info_handle(httpd_req_t *req)
         s2j_struct_get_basic_element(device, json, string, apIp);
 
         if (netModule_is_mmwifi()) {
+#if CONFIG_CT_NET_HALOW
             mm_wifi_set_country_code(device->countryCode);
+#endif
 
         }
 
@@ -1951,7 +1965,9 @@ static esp_err_t web_server_start(uint16_t port)
     config.lru_purge_enable = true;
     config.keep_alive_enable = true;
     config.server_port = port;
-    config.stack_size = 16384;
+    /* Measured HWM peaked at ~1.2K used; 6K leaves room for browser
+     * sessions (JSON handlers + cert upload) the bench capture never ran. */
+    config.stack_size = 6144;
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&g_webServer, &config) == ESP_OK) {
         for (i = 0; i < config.max_uri_handlers; i++) {

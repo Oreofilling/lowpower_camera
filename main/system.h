@@ -157,6 +157,18 @@ rstReason_e system_restart_reasons();
 void system_show_meminfo();
 
 /**
+ * Print RTOS task information
+ * Shows heap summary and per-task stack high water mark, priority, run time and CPU ratio
+ */
+void system_show_taskinfo();
+
+/**
+ * Print heap usage summary
+ * @param by_task Also print per-task allocation totals (needs CONFIG_HEAP_TASK_TRACKING)
+ */
+void system_show_heapinfo(bool by_task);
+
+/**
  * Execute scheduled tasks
  */
 void system_schedule_todo();

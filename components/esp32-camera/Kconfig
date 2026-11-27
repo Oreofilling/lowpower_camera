@@ -211,3 +211,11 @@ menu "Camera configuration"
             Please confirm the color range mode of the current camera sensor, incorrect color range mode may cause color difference in the final converted image.
             Full range mode is used by default. If this option is not selected, the format conversion function will be done using the limited range mode.
 endmenu
+
+    config CAMERA_JPEG_CONVERTER
+        bool "Software JPEG encoder (frame2jpg)"
+        default y
+        help
+            Software JPEG encoding for non-JPEG sensors (frame2jpg). Sensors
+            with hardware JPEG (e.g. OV5640) never use it; disabling saves
+            ~6-9 KB of internal RAM (huffman tables in .bss).
