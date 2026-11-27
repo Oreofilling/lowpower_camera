@@ -16,6 +16,7 @@
 #include "mqtt.h"
 #include "webhook.h"
 #include "push.h"
+#include "utils.h"
 #include "storage.h"
 #include "camera.h"
 
@@ -112,7 +113,7 @@ void push_open(QueueHandle_t in, QueueHandle_t out)
     webhook_open();
     g_eventGroup = xEventGroupCreate();
     xEventGroupClearBits(g_eventGroup, PUSH_READY_BIT | PUSH_EXIT_BIT);
-    xTaskCreatePinnedToCore(push_task, TAG, 8 * 1024, NULL, 4, &g_taskHandle, 1);
+    xTaskCreatePinnedToCore(push_task, TAG, 6 * 1024, NULL, 4, &g_taskHandle, 1);
     g_isRunning = true;
 }
 

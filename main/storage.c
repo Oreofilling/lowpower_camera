@@ -424,8 +424,8 @@ void storage_open(QueueHandle_t in, QueueHandle_t out)
     g_mdStorage.out = out;
     g_mdStorage.eventGroup = xEventGroupCreate();
     g_mdStorage.mutex = xSemaphoreCreateMutex();
-    xTaskCreatePinnedToCore((TaskFunction_t)record, "record", 4 * 1024, &g_mdStorage, 4, NULL, 0);
-    xTaskCreatePinnedToCore((TaskFunction_t)upload, "upload", 4 * 1024, &g_mdStorage, 4, NULL, 1);
+    xTaskCreatePinnedToCore((TaskFunction_t)record, "record", 3584, &g_mdStorage, 4, NULL, 0);
+    xTaskCreatePinnedToCore((TaskFunction_t)upload, "upload", 3584, &g_mdStorage, 4, NULL, 1);
     debug_cmd_add(g_cmd, sizeof(g_cmd) / sizeof(esp_console_cmd_t));
 }
 

@@ -13,6 +13,7 @@
 #include "ct_prov_app.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -38,12 +39,14 @@ static deviceInfo_t s_dev;
 static ct_prov_ble_identity_t s_identity;
 static bool s_active;
 
-/* Data scratch shared by the F2 handlers. Static because the request
- * callback runs on the 4096-byte NimBLE host task stack. */
-static char s_data_buf[3840];
+/* Scratch shared by the F2 handlers: heap-allocated per dispatch so the
+ * memory returns to the RTOS heap between provisioning requests (duty
+ * cycles never provision). The dispatch callback itself runs on the
+ * 4096-byte NimBLE host task stack, hence heap rather than stack. */
+#define CT_PROV_SCRATCH_SIZE 3840
 
 /* Serializes dispatch between the NimBLE host task (BLE) and the httpd
- * worker (softAP HTTP): both funnels share s_data_buf. */
+ * worker (softAP HTTP). */
 static SemaphoreHandle_t s_dispatch_mux;
 
 /* ---- NVS adapters for components/ct_prov_config ------------------------ */
@@ -108,10 +111,11 @@ static const ct_prov_reader_t s_reader = {
 
 #define SCAN_CACHE_MAX 64
 
-/* Both arrays are static: 64 wifi_ap_record_t alone would blow the host
- * task stack. */
-static ct_prov_scan_item_t s_scan_cache[SCAN_CACHE_MAX];
-static wifi_ap_record_t s_scan_raw[SCAN_CACHE_MAX];
+/* Both arrays are heap-allocated on the first scan and freed when the
+ * provisioning app stops: 64 wifi_ap_record_t alone would blow the host
+ * task stack, and duty cycles never scan. */
+static ct_prov_scan_item_t *s_scan_cache;
+static wifi_ap_record_t *s_scan_raw;
 static size_t s_scan_count;
 
 /* Only the radio module reports "wifi" as scannable; on CAT1 hardware the
@@ -152,6 +156,16 @@ static int scan_cache_refresh(void)
         return -1;
     }
     const wifi_scan_config_t cfg = {.show_hidden = false};
+    if (s_scan_cache == NULL) {
+        s_scan_cache = malloc(SCAN_CACHE_MAX * sizeof(*s_scan_cache));
+    }
+    if (s_scan_raw == NULL) {
+        s_scan_raw = malloc(SCAN_CACHE_MAX * sizeof(*s_scan_raw));
+    }
+    if (s_scan_cache == NULL || s_scan_raw == NULL) {
+        ESP_LOGE(TAG, "scan cache OOM");
+        return -1;
+    }
     if (esp_wifi_scan_start(&cfg, true) != ESP_OK) {
         ESP_LOGW(TAG, "wifi scan failed on the radio");
         return -1;
@@ -282,8 +296,8 @@ static size_t error_response(int64_t id, const char *op, const char *code,
  * the host task, so a scan can never land mid-write (doc 9 BUSY is
  * unreachable by construction).
  */
-static size_t dispatch_request(const ct_prov_envelope_t *req, char *resp,
-                               size_t cap)
+static size_t dispatch_request_scratch(const ct_prov_envelope_t *req, char *resp,
+                                       size_t cap, char *scratch, size_t scratch_cap)
 {
     if (strcmp(req->op, "device.info.get") == 0) {
         char data[640];
@@ -298,17 +312,17 @@ static size_t dispatch_request(const ct_prov_envelope_t *req, char *resp,
     }
     if (strcmp(req->op, "communication.capabilities.get") == 0) {
         return ct_prov_capabilities_response(
-            req->id, wifi_scannable(), current_network_name(), s_data_buf,
-            sizeof(s_data_buf), resp, cap);
+            req->id, wifi_scannable(), current_network_name(), scratch,
+            scratch_cap, resp, cap);
     }
     if (strcmp(req->op, "config.get") == 0) {
-        return ct_prov_config_get_response(req->id, &s_reader, s_data_buf,
-                                           sizeof(s_data_buf), resp, cap);
+        return ct_prov_config_get_response(req->id, &s_reader, scratch,
+                                           scratch_cap, resp, cap);
     }
     if (strcmp(req->op, "config.set") == 0) {
         return ct_prov_config_set_response(
-            req->id, req->data_json, &s_store, s_data_buf,
-            sizeof(s_data_buf), resp, cap);
+            req->id, req->data_json, &s_store, scratch,
+            scratch_cap, resp, cap);
     }
     if (strcmp(req->op, "communication.scan") == 0) {
         char section[16];
@@ -335,11 +349,27 @@ static size_t dispatch_request(const ct_prov_envelope_t *req, char *resp,
         }
         return ct_prov_scan_page_response(
             req->id, "wifi", has_cursor, cursor, s_scan_cache, s_scan_count,
-            s_data_buf, sizeof(s_data_buf), resp, cap);
+            scratch, scratch_cap, resp, cap);
     }
     /* Everything outside the shipped operation set is a typed refusal. */
     return error_response(req->id, req->op, "UNSUPPORTED_OPERATION",
                           "operation not implemented", resp, cap);
+}
+
+/* Scratch is per-request heap: between provisioning calls the memory stays
+ * available to the RTOS heap (duty cycles never provision). */
+static size_t dispatch_request(const ct_prov_envelope_t *req, char *resp,
+                               size_t cap)
+{
+    char *scratch = malloc(CT_PROV_SCRATCH_SIZE);
+    if (scratch == NULL) {
+        return error_response(req->id, req->op, "INTERNAL_ERROR",
+                              "out of memory", resp, cap);
+    }
+    size_t n = dispatch_request_scratch(req, resp, cap, scratch,
+                                        CT_PROV_SCRATCH_SIZE);
+    free(scratch);
+    return n;
 }
 
 /*
@@ -469,4 +499,9 @@ void ct_prov_app_stop(void)
 {
     s_active = false;
     ct_prov_ble_stop();
+    free(s_scan_cache);
+    s_scan_cache = NULL;
+    free(s_scan_raw);
+    s_scan_raw = NULL;
+    s_scan_count = 0;
 }

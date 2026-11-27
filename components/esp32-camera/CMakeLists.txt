@@ -4,11 +4,20 @@ set(idf_version "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}")
 # set conversion sources
 set(COMPONENT_SRCS
   conversions/yuv.c
-  conversions/to_jpg.cpp
   conversions/to_bmp.c
-  conversions/jpge.cpp
   conversions/esp_jpg_decode.c
   )
+
+if(CONFIG_CAMERA_JPEG_CONVERTER)
+  list(APPEND COMPONENT_SRCS
+    conversions/to_jpg.cpp
+    conversions/jpge.cpp
+    )
+else()
+  list(APPEND COMPONENT_SRCS
+    conversions/to_jpg_stub.c
+    )
+endif()
 
 set(COMPONENT_PRIV_INCLUDEDIRS
   conversions/private_include
