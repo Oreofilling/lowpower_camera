@@ -3,7 +3,9 @@
 #include "esp_log.h"
 #include "cat1.h"
 #include "wifi.h"
+#if CONFIG_CT_NET_HALOW
 #include "morse.h"
+#endif
 #include "misc.h"
 #include "utils.h"
 #include "net_module.h"
@@ -25,7 +27,11 @@ static RTC_DATA_ATTR net_module_t g_NetModule = {0};
  */
 bool netModule_is_mmwifi(void)
 {
+#if CONFIG_CT_NET_HALOW
     return g_NetModule.mode == NET_HALOW;
+#else
+    return false;
+#endif
 }
 
 /**
@@ -104,10 +110,13 @@ void netModule_check(void)
         mac_hex2str(mac_hex, device.mac);
         ESP_LOGW(TAG, "invalid mac, use default %s", device.mac);
     }
+#if CONFIG_CT_NET_HALOW
     if(ESP_OK == mm_wifi_init(mm_netif_create_default_wifi_sta(), mac_hex, device.countryCode)){
         mm_wifi_deinit();
         g_NetModule.mode = NET_HALOW;
-    }else if(ESP_OK == cat1_connect_check()){
+    }else
+#endif
+    if(ESP_OK == cat1_connect_check()){
         g_NetModule.mode = NET_CAT1;
     }else{
         g_NetModule.mode = NET_WIFI;
@@ -192,7 +201,9 @@ void netModule_open(modeSel_e mode)
  */
 void netModule_deinit(void)
 {
+#if CONFIG_CT_NET_HALOW
     if(g_NetModule.mode == NET_HALOW){
         mm_wifi_shutdown();
     }
+#endif
 }

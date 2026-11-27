@@ -6,7 +6,9 @@
 #include "push.h"
 #include "sleep.h"
 #include "http.h"
+#if CONFIG_CT_NET_HALOW
 #include "morse.h"
+#endif
 #include "camera.h"
 #include "misc.h"
 #include "lwip/sockets.h"
@@ -25,6 +27,8 @@
 #define WIFI_STA_DISCONNECT_TIMEOUT_MS (2000)  // Max wait for disconnection
 #define WIFI_STA_CHECK_TIMEOUT_MS (20000)  // Initial connection check timeout
 #define WIFI_STA_CONNECT_MAX_RETRIES (3)   //The number of retries when automatically connecting in WiFi STA mode.
+#define WIFI_STA_RECONNECT_MAX      (10)   // Post-link reconnect attempts before giving up
+#define WIFI_STA_RECONNECT_DELAY_MS (3000) // Backoff between post-link reconnect attempts
 /**
  * WiFi module state structure
  */
@@ -36,9 +40,14 @@ typedef struct mdWifi {
     esp_timer_handle_t timer;   ///< AP timeout timer handle
     uint8_t apUserCount;        ///< Number of connected AP clients
     esp_netif_t *netif;         ///< Network interface handle
+    esp_timer_handle_t staRetryTimer; ///< STA reconnect one-shot timer
+    uint8_t staRetry;           ///< STA reconnect attempts since last success
+    bool staWanted;             ///< STA is meant to be up (cleared on stop)
 } mdWifi_t;
 
 static mdWifi_t g_wifi = {0};  // Global WiFi state
+
+static void sta_retry_timer_cb(void *arg);
 
 /**
  * WiFi event handler
@@ -61,11 +70,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     /* Sta mode */
     if (event_id == WIFI_EVENT_STA_START) {
         ESP_LOGI(TAG, "WIFI_EVENT_STA_START");
+        wifi->staWanted = true;
+        wifi->staRetry = 0;
         if(!netModule_is_mmwifi())
             esp_wifi_connect();
     }
     if (event_id == WIFI_EVENT_STA_STOP) {
         ESP_LOGI(TAG, "WIFI_EVENT_STA_STOP");
+        wifi->staWanted = false;
+        if (wifi->staRetryTimer) {
+            esp_timer_stop(wifi->staRetryTimer);
+        }
     }
     if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED");
@@ -73,9 +88,25 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         xEventGroupSetBits(wifi->eventGroup, WIFI_STA_DISCONNECT_BIT);
         wifi->isConnected = false;
         push_stop();
+        /* One rejection used to leave the session offline; retry with a
+         * backoff so a configured broker stays reachable in config mode. */
+        if (wifi->staWanted && wifi->staRetry < WIFI_STA_RECONNECT_MAX) {
+            if (wifi->staRetryTimer == NULL) {
+                const esp_timer_create_args_t args = {
+                    .callback = sta_retry_timer_cb,
+                    .arg = wifi,
+                    .name = "sta_retry",
+                };
+                esp_timer_create(&args, &wifi->staRetryTimer);
+            }
+            wifi->staRetry++;
+            esp_timer_stop(wifi->staRetryTimer);
+            esp_timer_start_once(wifi->staRetryTimer, WIFI_STA_RECONNECT_DELAY_MS * 1000ULL);
+        }
     }
     if (event_id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED");
+        wifi->staRetry = 0;
         if (netModule_is_mmwifi()) {
             xEventGroupClearBits(wifi->eventGroup, WIFI_STA_DISCONNECT_BIT);
             xEventGroupSetBits(wifi->eventGroup, WIFI_STA_LINK_UP_BIT);
@@ -172,11 +203,26 @@ static void wifi_cfg_sta(const char *ssid, const char *password)
         }
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     }else{
+#if CONFIG_CT_NET_HALOW
         ESP_ERROR_CHECK(mm_wifi_set_config(ssid, password));
+#endif
     }
 
     ESP_LOGI(TAG, "wifi_init_sta finished.");
     ESP_LOGI(TAG, "connect to ap SSID:%s", ssid);
+}
+
+/**
+ * STA reconnect timer callback
+ * @param arg Pointer to mdWifi_t state
+ */
+static void sta_retry_timer_cb(void *arg)
+{
+    mdWifi_t *wifi = (mdWifi_t *)arg;
+    if (wifi->staWanted) {
+        ESP_LOGI(TAG, "STA reconnecting... (%d/%d)", wifi->staRetry, WIFI_STA_RECONNECT_MAX);
+        esp_wifi_connect();
+    }
 }
 
 /**
@@ -464,16 +510,20 @@ void wifi_open(wifi_mode_t mode)
     if (mode & WIFI_MODE_STA) {
         if(!netModule_is_mmwifi())
             esp_netif_create_default_wifi_sta();
+#if CONFIG_CT_NET_HALOW
         else
             mm_wifi_init(mm_netif_create_default_wifi_sta(), mac_hex, device.countryCode);
+#endif
         wifiAttr_t wifi;
         cfg_get_wifi_attr(&wifi);
         wifi_cfg_sta(wifi.ssid, wifi.password);
     }
     if(!netModule_is_mmwifi())
         ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_CT_NET_HALOW
     else
         mm_wifi_connect();
+#endif
 
     ESP_LOGI(TAG, "wifi init finished.");
     debug_cmd_add(g_cmd, sizeof(g_cmd) / sizeof(esp_console_cmd_t));
@@ -520,8 +570,10 @@ esp_err_t wifi_sta_reconnect(const char *ssid, const char *password)
     EventBits_t uxBits;
     if(!netModule_is_mmwifi())
         esp_wifi_disconnect();
+#if CONFIG_CT_NET_HALOW
     else
         mm_wifi_disconnect();
+#endif
 
     xEventGroupWaitBits(g_wifi.eventGroup, WIFI_STA_DISCONNECT_BIT, true, true, \
                         pdMS_TO_TICKS(WIFI_STA_DISCONNECT_TIMEOUT_MS));
@@ -537,6 +589,7 @@ esp_err_t wifi_sta_reconnect(const char *ssid, const char *password)
     }
 
     xEventGroupClearBits(g_wifi.eventGroup, WIFI_STA_LINK_UP_BIT);
+#if CONFIG_CT_NET_HALOW
     if (mm_wifi_connect() != ESP_OK) {
         ESP_LOGE(TAG, "HaLow reconnect failed");
         return ESP_FAIL;
@@ -549,6 +602,7 @@ esp_err_t wifi_sta_reconnect(const char *ssid, const char *password)
     if (uxBits & WIFI_STA_LINK_UP_BIT) {
         return ESP_OK;
     }
+#endif
     return ESP_FAIL;
 }
 
@@ -568,8 +622,10 @@ void wifi_close()
 {
     if (g_wifi.bInit) {
         esp_wifi_stop();
+#if CONFIG_CT_NET_HALOW
         if(netModule_is_mmwifi())
             mm_wifi_shutdown();
+#endif
     }
 
 }
@@ -613,6 +669,7 @@ esp_err_t wifi_get_list(wifiList_t *list)
         list->count = ap_count;
         free(ap_info);
     }else{
+#if CONFIG_CT_NET_HALOW
         mm_scan_result_t *result = calloc(1, sizeof(mm_scan_result_t));
         if (result == NULL) {
             ESP_LOGE(TAG, "Failed to malloc buffer to print scan results");
@@ -638,6 +695,9 @@ esp_err_t wifi_get_list(wifiList_t *list)
             list->nodes[i].bAuthenticate = !!result->items[i].authmode;
         }
         free(result);
+#else
+        return ESP_FAIL;
+#endif
     }
     return ESP_OK;
 }

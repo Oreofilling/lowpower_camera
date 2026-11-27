@@ -10,4 +10,12 @@ menu "CT application"
             softAP HTTP transport) stay available, the BLE stack never
             initializes, and its RAM goes to the camera pipeline.
 
+    config CT_NET_HALOW
+        bool "Morse/HaLow network module support"
+        default y
+        help
+            Compiles the Morse (HaLow) SDK and its probe path. WiFi-only SKU
+            builds can disable it: --gc-sections then drops the whole SDK
+            (~10-15 KB of internal RAM statics) from the image.
+
 endmenu

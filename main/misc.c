@@ -36,7 +36,9 @@
 #include "wifi.h"
 #include "net_module.h"
 #include "system.h"
+#if CONFIG_CT_NET_HALOW
 #include "morse_dpp_cli.h"
+#endif
 #include "push.h"
 
 #define TAG "-->MISC"
@@ -219,6 +221,7 @@ static void misc_led_breath_start(void)
     xSemaphoreGive(g_misc.led.mutex);
 }
 
+#if CONFIG_CT_NET_HALOW
 static void dpp_pb_task(void *arg)
 {
     uint32_t timeout_ms = (uint32_t)(uintptr_t) arg;
@@ -240,6 +243,7 @@ static void dpp_pb_task(void *arg)
     sleep_set_event_bits(SLEEP_DPP_DONE_BIT);
     vTaskDelete(NULL);
 }
+#endif /* CONFIG_CT_NET_HALOW */
 
 static void button_double_click_cb(void *arg, void *priv)
 {
@@ -251,6 +255,7 @@ static void button_double_click_cb(void *arg, void *priv)
         return;
     }
 
+#if CONFIG_CT_NET_HALOW
     if (system_get_mode() == MODE_CONFIG) {
         /* Network is already up in config mode; run DPP in a worker task. */
         if (xTaskCreate(dpp_pb_task, "dpp_pb", DPP_PB_TASK_STACK,
@@ -261,6 +266,7 @@ static void button_double_click_cb(void *arg, void *priv)
         }
         return;
     }
+#endif
 }
 
 static void button_long_press_start_cb(void *arg, void *priv)
@@ -887,7 +893,7 @@ void misc_open(uint8_t* mode)
     adc_start();
     button_start();
     pwm_config();
-    xTaskCreatePinnedToCore((TaskFunction_t)misc_task, "misc_task", 3 * 1024, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore((TaskFunction_t)misc_task, "misc_task", 2560, NULL, 4, NULL, 1);
     g_misc.isInit = 1;
     debug_cmd_add(g_cmd, sizeof(g_cmd) / sizeof(esp_console_cmd_t));
     time_t now;

@@ -15,7 +15,9 @@
 #include "utils.h"
 #include "camera.h"
 #include "mmregdb.h"
+#if CONFIG_CT_NET_HALOW
 #include "morse.h"
+#endif
 #include "net_module.h"
 #include "pir.h"
 #include "push.h"
@@ -840,7 +842,9 @@ esp_err_t onboarding_handle_config(const char *data, size_t len, bool *mqtt_chan
         if (strcmp(device.countryCode, old_device.countryCode) != 0 &&
             mmregdb_lookup_domain(device.countryCode) != NULL &&
             netModule_is_mmwifi()) {
+#if CONFIG_CT_NET_HALOW
             mm_wifi_set_country_code(device.countryCode);
+#endif
         }
     }
 

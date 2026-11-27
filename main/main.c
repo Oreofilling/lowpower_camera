@@ -38,7 +38,9 @@
 #include "push.h"
 #include "cat1.h"
 #include "net_module.h"
+#if CONFIG_CT_NET_HALOW
 #include "morse.h"
+#endif
 #include "utils.h"
 #include "storage.h"
 #include "session_log.h"
@@ -354,7 +356,9 @@ static void common_init(void)
     srand(esp_random());
 
     debug_open();
+    #if CONFIG_CT_NET_HALOW
     morse_dpp_cli_init();
+    #endif
     cfg_init();
     sleep_open();
 }
