@@ -3,10 +3,14 @@
  */
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_netif.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
 #include "esp_tls_crypto.h"
 #include "esp_crt_bundle.h"
 #include "mqtt_client.h"
@@ -260,7 +264,11 @@ static void mqtt_esp_config(mdMqtt_t *m)
     c->broker.address.transport = m->mqtt.tlsEnable ? MQTT_TRANSPORT_OVER_SSL : MQTT_TRANSPORT_OVER_TCP;
     c->credentials.username = m->mqtt.user;
     c->credentials.client_id = m->mqtt.clientId;
-    c->task.stack_size = 12 * 1024;
+    /* Plain-TCP sessions dispatch from a 4K stack fine; TLS (mbedtls
+     * handshake + cert parse) uses esp-mqtt's own default of 6144, which
+     * keeps the contiguous-block requirement inside what a fragmented
+     * config-mode heap can still provide. */
+    c->task.stack_size = m->mqtt.tlsEnable ? (6 * 1024) : (4 * 1024);
     c->network.disable_auto_reconnect = true;
     if (strlen(m->mqtt.password)) {
         c->credentials.authentication.password = m->mqtt.password;
@@ -332,8 +340,195 @@ static int do_sendrate_cmd(int argc, char **argv)
     return ESP_OK;
 }
 
+/*
+ * One-shot broker connectivity probe: brings up a dedicated client with the
+ * saved (or onboarding-default) parameters, reports the verdict, tears it
+ * down. Config mode skips the resident client to save RAM next to BLE, so
+ * this is the way to answer "can this device reach my broker?".
+ *
+ * "mqtttest"        - lightweight: raw TCP connect + MQTT CONNECT/CONNACK
+ *                     handshake, runs on the console task stack (works in
+ *                     config mode where the esp-mqtt task would not fit).
+ * "mqtttest full"   - full esp-mqtt client (validates TLS/auth paths); needs
+ *                     the RAM headroom of snapshot/schedule mode.
+ */
+#define MQTTTEST_TIMEOUT_MS 15000
+#define MQTTTEST_OK_BIT   BIT(0)
+#define MQTTTEST_FAIL_BIT BIT(1)
+
+static void mqtttest_event_handler(void *args, esp_event_base_t base, int32_t id, void *data)
+{
+    if (id == MQTT_EVENT_CONNECTED) {
+        xEventGroupSetBits((EventGroupHandle_t)args, MQTTTEST_OK_BIT);
+    } else if (id == MQTT_EVENT_DISCONNECTED || id == MQTT_EVENT_ERROR) {
+        xEventGroupSetBits((EventGroupHandle_t)args, MQTTTEST_FAIL_BIT);
+    }
+}
+
+/* Hand-built MQTT v3.1.1 CONNECT on a raw socket; reports the CONNACK verdict. */
+static int mqtttest_tcp_probe(mdMqtt_t *m)
+{
+    static const char cid[] = "ne101-mqtttest";
+
+    struct hostent *he = gethostbyname(m->mqtt.host);
+    if (he == NULL || he->h_addr_list[0] == NULL) {
+        printf("mqtttest: DNS lookup failed for %s\n", m->mqtt.host);
+        return ESP_FAIL;
+    }
+    struct sockaddr_in dst;
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons((uint16_t) m->mqtt.port);
+    dst.sin_addr = *((struct in_addr *) he->h_addr_list[0]);
+
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+        printf("mqtttest: socket failed, errno %d\n", errno);
+        return ESP_FAIL;
+    }
+    fcntl(s, F_SETFL, O_NONBLOCK);
+    if (connect(s, (struct sockaddr *) &dst, sizeof(dst)) != 0 && errno != EINPROGRESS) {
+        printf("mqtttest: connect to %s:%lu failed, errno %d\n",
+               m->mqtt.host, (unsigned long) m->mqtt.port, errno);
+        close(s);
+        return ESP_FAIL;
+    }
+    fd_set wset;
+    FD_ZERO(&wset);
+    FD_SET(s, &wset);
+    struct timeval tv = { .tv_sec = 6, .tv_usec = 0 };
+    if (select(s + 1, NULL, &wset, NULL, &tv) <= 0) {
+        printf("mqtttest: TCP connect to %s:%lu timed out\n",
+               m->mqtt.host, (unsigned long) m->mqtt.port);
+        close(s);
+        return ESP_FAIL;
+    }
+    int soerr = 0;
+    socklen_t slen = sizeof(soerr);
+    getsockopt(s, SOL_SOCKET, SO_ERROR, &soerr, &slen);
+    if (soerr != 0) {
+        printf("mqtttest: TCP connect to %s:%lu refused, errno %d\n",
+               m->mqtt.host, (unsigned long) m->mqtt.port, soerr);
+        close(s);
+        return ESP_FAIL;
+    }
+
+    /* handshake phase: blocking socket, 5s receive timeout */
+    fcntl(s, F_SETFL, 0);
+    tv.tv_sec = 5;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint8_t pkt[384];
+    size_t n = 0;
+    pkt[n++] = 0x10; /* CONNECT, remaining length patched below */
+    pkt[n++] = 0;    /* remaining length */
+    size_t vh = n;
+    pkt[n++] = 0x00; pkt[n++] = 0x04;
+    memcpy(&pkt[n], "MQTT", 4);
+    n += 4;
+    pkt[n++] = 0x04;  /* protocol level 4 (v3.1.1) */
+    bool has_auth = (m->mqtt.user[0] != '\0');
+    pkt[n++] = has_auth ? 0xC2 : 0x02; /* clean session [+ username + password] */
+    pkt[n++] = 0x00; pkt[n++] = 0x3C; /* keep-alive 60s */
+    /* payload: client id, then optional username and password */
+    const char *fields[3] = { cid, m->mqtt.user, m->mqtt.password };
+    for (int i = 0; i < (has_auth ? 3 : 1); i++) {
+        size_t l = strlen(fields[i]);
+        pkt[n++] = (uint8_t) (l >> 8);
+        pkt[n++] = (uint8_t) l;
+        memcpy(&pkt[n], fields[i], l);
+        n += l;
+    }
+    pkt[vh - 1] = (uint8_t) (n - 2);
+
+    if (send(s, pkt, n, 0) != (int) n) {
+        printf("mqtttest: send failed, errno %d\n", errno);
+        close(s);
+        return ESP_FAIL;
+    }
+    uint8_t ack[4] = {0};
+    size_t got = 0;
+    while (got < sizeof(ack)) {
+        int r = recv(s, &ack[got], sizeof(ack) - got, 0);
+        if (r <= 0) {
+            break;
+        }
+        got += (size_t) r;
+    }
+    close(s);
+
+    if (got < sizeof(ack) || ack[0] != 0x20) {
+        printf("mqtttest: %s:%lu answered TCP but no CONNACK (not an MQTT listener?)\n",
+               m->mqtt.host, (unsigned long) m->mqtt.port);
+        return ESP_FAIL;
+    }
+    if (ack[3] == 0) {
+        printf("mqtttest: CONNECTED to %s:%lu (broker accepted)\n",
+               m->mqtt.host, (unsigned long) m->mqtt.port);
+        if (m->mqtt.tlsEnable) {
+            printf("mqtttest: note: TLS enabled in config, plaintext probe proved reachability only\n");
+        }
+        return ESP_OK;
+    }
+    printf("mqtttest: broker REFUSED, CONNACK code %u"
+           " (1=protocol, 2=clientid, 3=unavailable, 4=bad user/pass, 5=not authorized)\n",
+           (unsigned) ack[3]);
+    return ESP_FAIL;
+}
+
+static int do_mqtttest_cmd(int argc, char **argv)
+{
+    bool full = (argc > 1 && strcmp(argv[1], "full") == 0);
+
+    if (g_MQ.client) {
+        printf("mqtttest: resident client is up, connected=%s\n", g_MQ.isConnected ? "yes" : "no");
+        return ESP_OK;
+    }
+
+    mdMqtt_t m; /* local, no shared state touched */
+    memset(&m, 0, sizeof(m));
+    mqtt_esp_config(&m);
+
+    if (!full) {
+        mqtttest_tcp_probe(&m);
+        mqtt_free_tls_certs(&m);
+        return ESP_OK;
+    }
+
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&m.cfg);
+    if (client == NULL) {
+        printf("mqtttest: client init failed (out of memory; try in snapshot/schedule mode)\n");
+        mqtt_free_tls_certs(&m);
+        return ESP_OK;
+    }
+
+    EventGroupHandle_t eg = xEventGroupCreate();
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtttest_event_handler, eg);
+    esp_mqtt_client_start(client);
+
+    printf("mqtttest: connecting to %s:%lu ...\n", m.mqtt.host, (unsigned long) m.mqtt.port);
+    EventBits_t bits = xEventGroupWaitBits(eg, MQTTTEST_OK_BIT | MQTTTEST_FAIL_BIT,
+                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(MQTTTEST_TIMEOUT_MS));
+    if (bits & MQTTTEST_OK_BIT) {
+        printf("mqtttest: CONNECTED to %s:%lu\n", m.mqtt.host, (unsigned long) m.mqtt.port);
+    } else if (bits & MQTTTEST_FAIL_BIT) {
+        printf("mqtttest: FAILED to connect to %s:%lu (refused or TLS error, see logs)\n",
+               m.mqtt.host, (unsigned long) m.mqtt.port);
+    } else {
+        printf("mqtttest: TIMEOUT after %d ms (host unreachable?)\n", MQTTTEST_TIMEOUT_MS);
+    }
+
+    esp_mqtt_client_disconnect(client);
+    esp_mqtt_client_stop(client);
+    esp_mqtt_client_destroy(client);
+    mqtt_free_tls_certs(&m);
+    vEventGroupDelete(eg);
+    return ESP_OK;
+}
+
 static esp_console_cmd_t g_cmd[] = {
     ESP_CONSOLE_CMD_INIT("sendrate", "mqtt send success rate", NULL, do_sendrate_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("mqtttest", "one-shot broker connect test", NULL, do_mqtttest_cmd, NULL),
 };
 
 void mqtt_open(void)

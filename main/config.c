@@ -695,6 +695,18 @@ static int do_version_cmd(int argc, char **argv)
     return ESP_OK;
 }
 
+static int do_ps_cmd(int argc, char **argv)
+{
+    system_show_taskinfo();
+    return ESP_OK;
+}
+
+static int do_mem_cmd(int argc, char **argv)
+{
+    system_show_heapinfo(argc > 1 && strcmp(argv[1], "task") == 0);
+    return ESP_OK;
+}
+
 static int do_schetime_cmd(int argc, char **argv)
 {
     if (argc < 2) {
@@ -793,6 +805,8 @@ static esp_console_cmd_t g_cmd[] = {
     ESP_CONSOLE_CMD_INIT("reboot", "system restart", NULL, do_reboot_cmd, NULL),
     ESP_CONSOLE_CMD_INIT("sleep", "system sleep", NULL, do_sleep_cmd, NULL),
     ESP_CONSOLE_CMD_INIT("version", "system software version", NULL, do_version_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("ps", "show RTOS task info", NULL, do_ps_cmd, NULL),
+    ESP_CONSOLE_CMD_INIT("mem", "show heap info: mem | mem task", NULL, do_mem_cmd, NULL),
     ESP_CONSOLE_CMD_INIT("schedule", "set schedule time, default 03:00:00", NULL, do_schetime_cmd, NULL),
     ESP_CONSOLE_CMD_INIT("cat1", "cat1 status", NULL, do_cat1_cmd, NULL),
     ESP_CONSOLE_CMD_INIT("tz", "set time zone", NULL, do_tz_cmd, NULL),
